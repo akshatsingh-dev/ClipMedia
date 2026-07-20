@@ -101,6 +101,11 @@ class BuildRequest(BaseModel):
 
 class ImportRequest(BaseModel):
     url: str = Field(min_length=5, max_length=500)
+    # Required for Instagram/TikTok: we cannot fetch their content, so the user
+    # supplies the caption. Dropping it here would make those imports fail with
+    # a confusing error rather than working.
+    caption_text: str | None = Field(default=None, max_length=5000)
+    confirmed_query: str | None = Field(default=None, max_length=300)
 
 
 def _repo(request: Request) -> Repo:
@@ -189,7 +194,9 @@ async def import_reel(req: ImportRequest, request: Request):
     queue = request.app.state.queue
     if queue is None:
         raise HTTPException(503, "build queue unavailable")
-    job = await queue.enqueue_job("import_seed", req.url)
+    job = await queue.enqueue_job(
+        "import_seed", req.url, req.caption_text, req.confirmed_query
+    )
     return {"status": "processing", "job_id": job.job_id}
 
 

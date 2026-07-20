@@ -21,6 +21,13 @@ export default function Home() {
         <div className="mt-8">
           <SearchBox />
         </div>
+        <p className="mt-4 text-sm text-white/40">
+          Or{" "}
+          <Link href="/import" className="text-accent hover:underline">
+            paste a clip you already loved
+          </Link>{" "}
+          and go deeper on it.
+        </p>
       </header>
 
       <section className="space-y-3">

@@ -407,3 +407,26 @@ is a trap even with a flag on it.
 Making these real still requires a human watching video. It is the single
 highest-value thing standing between this project and knowing whether the
 ranking is any good.
+
+## D38 — Reel-import UI built, and the caption path was broken
+Built `/import` — paste a clip, get a path. Per the demand research this is the
+one part of the product that demonstrates in ten seconds, which is what a
+short-form acquisition loop actually needs. The doc schedules it for "Months 4+";
+the research argues that is backwards.
+
+Building the UI immediately exposed a break in the existing backend: the API's
+`ImportRequest` accepted only `url`, so `caption_text` was silently dropped.
+Instagram and TikTok imports *require* that field — the backend raises without
+it — so every non-YouTube import would have failed with a confusing error. Wired
+`caption_text` and `confirmed_query` through UI → API → worker → `import_seed`.
+
+## D39 — Platform-detection parity is enforced by test
+Detection now exists in two languages: `ImportBox.tsx` decides whether to ask for
+a caption, `reel_import.py` decides whether the import is legal without one. If
+they drift, a user pastes a TikTok link, the UI never asks for a caption, and the
+backend rejects it — a dead end with no visible cause.
+
+`tests/test_platform_parity.py` parses the regexes out of the TSX and asserts
+both sides classify the same URLs identically, and that the set of
+caption-requiring platforms matches on both sides. Duplication across a language
+boundary is sometimes right; unguarded duplication never is.

@@ -124,7 +124,12 @@ async def build_page_job(ctx: dict, query: str, mode: str | None = None) -> dict
     return {"slug": result.slug, "mode": result.mode, "cost_usd": result.cost_usd}
 
 
-async def import_seed_job(ctx: dict, url: str) -> dict:
+async def import_seed_job(
+    ctx: dict,
+    url: str,
+    caption_text: str | None = None,
+    confirmed_query: str | None = None,
+) -> dict:
     """Reel-import (A4.3). Analyse a pasted link, then build a path from it."""
     from services.worker.pipeline.reel_import import import_seed
 
@@ -135,7 +140,15 @@ async def import_seed_job(ctx: dict, url: str) -> dict:
         embedder=build_embedder(),
         repo=repo,
     )
-    analysis, result = await asyncio.to_thread(functools.partial(import_seed, url, deps))
+    analysis, result = await asyncio.to_thread(
+        functools.partial(
+            import_seed,
+            url,
+            deps,
+            caption_text=caption_text or "",
+            confirmed_query=confirmed_query,
+        )
+    )
     path_id = await repo.save_learning_path(url, analysis, result.page)
     return {"path_id": path_id, "mode": result.mode}
 
