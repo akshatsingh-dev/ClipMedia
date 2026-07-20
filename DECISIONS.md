@@ -114,3 +114,43 @@ supports both generations, and both snippet-object and dict cue formats.
 Found only because a live test was run against a real video. Offline fakes would
 never have caught it, which is why `tests/test_integration_live.py` exists
 (network-gated behind `DEEPCLIP_LIVE=1`).
+
+## D14 — Embedder is a seam, and the offline one is opt-in only
+C1 defers the embedding choice to a benchmark (bge-m3 vs. a hosted model on 200
+queries). Rather than pre-empt it, `Embedder` is a protocol with three
+implementations: bge-m3 (default; local, free, no key), Voyage (hosted), and
+`HashingEmbedder`.
+
+HashingEmbedder is deterministic and needs no model, so the full
+segment -> embed -> store -> vector-search path can be exercised offline. It is
+NOT semantic and `build_embedder` will not select it unless explicitly asked —
+if it were ever the fallback, retrieval quality would silently drop to zero,
+which is the worst possible failure mode because everything would still appear
+to work.
+
+Dimension is pinned at 1024: `segments.embedding` is VECTOR(1024) with an HNSW
+index on it, so changing dims is a migration, not a config flip.
+
+## D15 — Page builds are claimed atomically
+`claim_page_build` inserts the row as 'building' and `/api/build` returns
+`joined: true` when a build is already in flight. Without this, two users hitting
+the same uncached query would each pay a full ~$1 build for the same page.
+
+## D16 — Progress never blocks the build
+`ProgressBus.publish` uses `put_nowait` and drops on a full queue; the Redis
+publisher swallows its own errors. A stalled or disconnected SSE client must not
+be able to stall or fail a page build — progress is advisory, the page is the
+product.
+
+The in-process bus is only valid within the API's own event loop. Cross-process
+progress (the deployed topology, where the worker is a separate container) goes
+over `RedisProgressBus`.
+
+## D17 — API startup and SSE timeouts are bounded and configurable
+The API previously blocked on startup when Postgres/Redis were unreachable (arq
+retries for ~5s), and the SSE generator held open for the full 300s timeout
+because `is_disconnected()` never fires under TestClient. Both are now
+`asyncio.wait_for`-bounded and env-configurable, and `tests/conftest.py` sets
+short values plus unroutable DSNs so no test can reach a real service.
+
+Suite went from hanging to 2.2s.

@@ -1,0 +1,249 @@
+"""FastAPI gateway.
+
+Routes (C1):
+  GET  /api/pages/{slug}      cached page or 404
+  POST /api/build             enqueue a build, returns job id
+  GET  /api/build/{id}/stream SSE progress for a live build
+  POST /api/import            reel-import
+  GET  /api/feed/{slug}       entertain feed
+  GET  /healthz
+
+Cache-first: a hit serves from Postgres for ~$0. A miss enqueues onto arq and the
+client follows the SSE stream, so the outline renders in ~5s even when the full
+build takes 60s (C5).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+from contextlib import asynccontextmanager
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+from packages.db.repo import Repo
+from services.worker.pipeline.outline import normalize_query
+
+from .progress import ProgressBus, ProgressEvent
+
+log = logging.getLogger(__name__)
+
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+    if o.strip()
+]
+
+STARTUP_TIMEOUT_S = float(os.environ.get("STARTUP_TIMEOUT_S", "3"))
+# Configurable so tests can bound the stream: a client that never signals
+# disconnect would otherwise hold the generator open for the full timeout.
+SSE_KEEPALIVE_S = float(os.environ.get("SSE_KEEPALIVE_S", "15"))
+SSE_TIMEOUT_S = float(os.environ.get("SSE_TIMEOUT_S", "300"))
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.repo = None
+    app.state.queue = None
+    app.state.bus = ProgressBus()
+    # Startup must not block on unreachable infrastructure: the API still serves
+    # /healthz and 503s without a DB, which is what makes local frontend work
+    # possible with nothing else running. arq in particular retries for ~5s.
+    try:
+        app.state.repo = await asyncio.wait_for(Repo.connect(), timeout=STARTUP_TIMEOUT_S)
+        log.info("connected to postgres")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("no database connection: %s", exc)
+    try:
+        from arq import create_pool
+        from arq.connections import RedisSettings
+
+        app.state.queue = await asyncio.wait_for(
+            create_pool(
+                RedisSettings.from_dsn(
+                    os.environ.get("REDIS_URL", "redis://localhost:6379")
+                )
+            ),
+            timeout=STARTUP_TIMEOUT_S,
+        )
+        log.info("connected to redis")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("no queue connection: %s", exc)
+
+    yield
+
+    if app.state.repo:
+        await app.state.repo.close()
+    if app.state.queue:
+        await app.state.queue.close()
+
+
+app = FastAPI(title="Deep Clip Search", version="0.1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+
+class BuildRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=300)
+    mode: str | None = Field(default=None, pattern="^(learn|entertain)$")
+
+
+class ImportRequest(BaseModel):
+    url: str = Field(min_length=5, max_length=500)
+
+
+def _repo(request: Request) -> Repo:
+    repo = request.app.state.repo
+    if repo is None:
+        raise HTTPException(503, "database unavailable")
+    return repo
+
+
+@app.get("/healthz")
+async def healthz(request: Request) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "database": request.app.state.repo is not None,
+        "queue": request.app.state.queue is not None,
+    }
+
+
+@app.get("/api/pages/{slug}")
+async def get_page(slug: str, request: Request):
+    """Cached page. Slug is the normalised query, so it is also the cache key."""
+    page = await _repo(request).get_page(normalize_query(slug))
+    if not page or page.get("status") != "ready":
+        raise HTTPException(404, "page not built")
+    return {
+        "query": page["query_norm"],
+        "mode": page["mode"],
+        "status": page["status"],
+        "page": page["page"],
+        "built_at": page["built_at"].isoformat() if page.get("built_at") else None,
+    }
+
+
+@app.get("/api/feed/{slug}")
+async def get_feed(slug: str, request: Request):
+    page = await get_page(slug, request)
+    if page["mode"] != "entertain":
+        raise HTTPException(404, "not a feed")
+    return page
+
+
+@app.get("/api/pages")
+async def list_pages(request: Request, limit: int = 50):
+    rows = await _repo(request).list_pages(limit=min(limit, 200))
+    return {
+        "pages": [
+            {
+                "slug": r["query_norm"],
+                "mode": r["mode"],
+                "title": r["title"],
+                "built_at": r["built_at"].isoformat() if r.get("built_at") else None,
+            }
+            for r in rows
+        ]
+    }
+
+
+@app.post("/api/build")
+async def build(req: BuildRequest, request: Request):
+    """Enqueue a build, or return the cached page immediately.
+
+    Returns 200 with `cached: true` on a hit so the client can skip the stream.
+    """
+    repo = _repo(request)
+    slug = normalize_query(req.query)
+
+    existing = await repo.get_page(slug)
+    if existing and existing.get("status") == "ready":
+        return {"cached": True, "slug": slug, "mode": existing["mode"], "page": existing["page"]}
+    if existing and existing.get("status") == "building":
+        # Another request already owns this build; join its stream rather than
+        # paying to build the same page twice.
+        return {"cached": False, "slug": slug, "status": "building", "joined": True}
+
+    queue = request.app.state.queue
+    if queue is None:
+        raise HTTPException(503, "build queue unavailable")
+
+    await repo.claim_page_build(slug, req.mode or "learn")
+    job = await queue.enqueue_job("build_page", req.query, req.mode)
+    return {"cached": False, "slug": slug, "status": "building", "job_id": job.job_id}
+
+
+@app.post("/api/import")
+async def import_reel(req: ImportRequest, request: Request):
+    queue = request.app.state.queue
+    if queue is None:
+        raise HTTPException(503, "build queue unavailable")
+    job = await queue.enqueue_job("import_seed", req.url)
+    return {"status": "processing", "job_id": job.job_id}
+
+
+@app.get("/api/paths/{path_id}")
+async def get_path(path_id: str, request: Request):
+    path = await _repo(request).get_learning_path(path_id)
+    if not path:
+        raise HTTPException(404, "path not found")
+    return {
+        "id": str(path["id"]),
+        "seed_url": path["seed_url"],
+        "seed_analysis": path["seed_analysis"],
+        "page": path["page"],
+    }
+
+
+@app.get("/api/build/{slug}/stream")
+async def stream_build(slug: str, request: Request):
+    """SSE progress. Outline arrives first, sections fill as they rank (C5)."""
+    normalized = normalize_query(slug)
+    bus: ProgressBus = request.app.state.bus
+    queue = bus.subscribe(normalized)
+
+    async def gen():
+        try:
+            yield _sse(ProgressEvent(stage="connected", message="listening"))
+            elapsed = 0.0
+            while elapsed < SSE_TIMEOUT_S:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=SSE_KEEPALIVE_S)
+                except asyncio.TimeoutError:
+                    elapsed += SSE_KEEPALIVE_S
+                    # Comment frame keeps proxies from closing an idle stream.
+                    yield ": keepalive\n\n"
+                    continue
+                elapsed = 0.0
+                yield _sse(event)
+                if event.stage in {"done", "failed"}:
+                    break
+        finally:
+            bus.unsubscribe(normalized, queue)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # nginx would otherwise buffer the stream
+        },
+    )
+
+
+def _sse(event: ProgressEvent) -> str:
+    return f"event: {event.stage}\ndata: {json.dumps(event.to_dict())}\n\n"
