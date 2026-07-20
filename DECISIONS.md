@@ -49,3 +49,29 @@ call per video (cost) or a local model (dependency). v1 uses cue-timing +
 sentence-boundary packing within the 30-90s target. Cheap, deterministic,
 testable. Revisit if eval shows segment boundaries are a ranking-quality
 bottleneck.
+
+## D7 — Demo topic changed from Gandhi/Speed to neural networks/viral classics
+The doc names Gandhi (Learn) and "funny Speed clips" (Entertain) as the golden
+pages. Building those needs real video IDs for that footage, and I had no
+compliant way to get them: outbound discovery requires the YouTube Data API key
+(absent), and scraping search results would violate the ToS posture the whole
+architecture rests on (B4). Inventing IDs would have produced dead embeds.
+
+Decision: build the demo from videos whose IDs are verifiable — an ML-explainer
+Learn page (3Blue1Brown, Karpathy, Welch Labs, CGP Grey, Umar Jamil, MITCBMM)
+and a viral-classics Entertain feed. Every id was checked against oEmbed.
+
+The Learn page satisfies the >=2-distinct-channels-per-chapter rule naturally,
+so it exercises the real constraint. Swap in Gandhi/Speed once a key exists —
+`eval/golden/pages.py` is the only file that changes.
+
+## D8 — Embed playback is unverified
+YouTube embeds render black in the automated browser used during development.
+Ruled out as an application bug: a bare `<iframe>` in a static HTML file, with
+no application code involved, is equally blank, while YouTube *thumbnails*
+(i.ytimg.com) load fine on the same pages. So the embed frame specifically is
+blocked in that browser.
+
+Consequence: everything up to the iframe boundary is verified (correct mount
+and unmount counts, sizing, src construction, facade, attribution), but no clip
+has been watched playing. First thing to check in a normal browser.
