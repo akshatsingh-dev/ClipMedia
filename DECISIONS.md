@@ -75,3 +75,42 @@ blocked in that browser.
 Consequence: everything up to the iframe boundary is verified (correct mount
 and unmount counts, sizing, src construction, facade, attribution), but no clip
 has been watched playing. First thing to check in a normal browser.
+
+## D9 — Moment detection: TextTiling for Learn, intensity peaks for Entertain
+The spec says segments come from "semantic boundaries" but never says how to
+pick the exact clip in/out points. That is the actual curation problem, so it
+gets its own module (`pipeline/moments.py`) separate from retrieval
+segmentation.
+
+Two algorithms, because the modes define "moment" differently:
+
+**Learn — TextTiling (Hearst 1997).** Slide a window over the token stream,
+measure lexical cohesion across each gap, cut at the valleys. Chosen over an
+LLM-per-video call because this runs over *every* candidate video; per-video
+Sonnet calls would blow up the C8 cost model. It is unsupervised, deterministic,
+and needs no model. Boundaries are then nudged to the nearest sentence with good
+`opening_quality` — anaphoric openers ("it does that by...") are penalised hard,
+since a clip that starts mid-thought is the clearest tell of a machine edit.
+
+**Entertain — intensity peak detection.** Score each sentence on non-speech cues
+(`[laughter]`), exclamation cadence, shouted caps, token repetition ("no no no"),
+and delivery rate; find local maxima; expand outward while intensity stays above
+35% of peak. Then add **4s pre-roll** — cutting exactly on the laugh loses the
+setup and the clip is incomprehensible. That pre-roll is the single most
+important parameter in the module.
+
+Validated on the real 3Blue1Brown neural-network transcript (286 cues): 13 topic
+boundaries at genuine subject shifts, top moments opening on "But if I told
+you...", "So once you write down...". Manual captions are the easy case;
+auto-caption performance is untested.
+
+## D10 — Bug: transcript library API mismatch would have skipped every video
+`youtube-transcript-api` >=1.0 replaced the static `list_transcripts` with
+instance `.list()`. The adapter called the old one inside a broad `except`, so
+every video would have logged "no transcript listing" and been silently skipped
+— the pipeline would have looked like it worked and produced nothing. Now
+supports both generations, and both snippet-object and dict cue formats.
+
+Found only because a live test was run against a real video. Offline fakes would
+never have caught it, which is why `tests/test_integration_live.py` exists
+(network-gated behind `DEEPCLIP_LIVE=1`).

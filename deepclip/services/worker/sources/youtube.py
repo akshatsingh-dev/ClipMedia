@@ -269,43 +269,65 @@ class YouTubeTranscriptFetcher:
     def __init__(self, languages: tuple[str, ...] = ("en",)):
         self.languages = languages
 
+    @staticmethod
+    def _listing(video_id: str):
+        """Handle both library generations.
+
+        >=1.0 exposes instance methods (`.list()`); older releases used the
+        static `list_transcripts`. Getting this wrong fails silently — every
+        video looks like it simply has no captions — so both are supported.
+        """
+        from youtube_transcript_api import YouTubeTranscriptApi
+
+        if hasattr(YouTubeTranscriptApi, "list_transcripts"):
+            return YouTubeTranscriptApi.list_transcripts(video_id)
+        return YouTubeTranscriptApi().list(video_id)
+
+    @staticmethod
+    def _to_cues(raw) -> list[TranscriptCue]:
+        """Snippet objects (>=1.0) and plain dicts (older) both appear here."""
+        cues = []
+        for c in raw:
+            if isinstance(c, dict):
+                start, dur, text = c["start"], c.get("duration", 0.0), c["text"]
+            else:
+                start, dur, text = c.start, getattr(c, "duration", 0.0), c.text
+            cues.append(
+                TranscriptCue(
+                    t_start=float(start),
+                    t_end=float(start) + float(dur),
+                    text=text,
+                )
+            )
+        return cues
+
     def fetch(self, video_id: str) -> Transcript | None:
         try:
-            from youtube_transcript_api import YouTubeTranscriptApi
+            listing = self._listing(video_id)
         except ImportError:  # pragma: no cover
             log.warning("youtube-transcript-api not installed")
             return None
-
-        try:
-            listing = YouTubeTranscriptApi.list_transcripts(video_id)
         except Exception as exc:
             log.info("no transcript listing for %s: %s", video_id, exc)
             return None
 
-        for kind, finder in (
-            ("manual", listing.find_manually_created_transcript),
-            ("auto", listing.find_generated_transcript),
+        langs = list(self.languages)
+        for kind, attr in (
+            ("manual", "find_manually_created_transcript"),
+            ("auto", "find_generated_transcript"),
         ):
-            try:
-                track = finder(list(self.languages))
-            except Exception:
+            finder = getattr(listing, attr, None)
+            if finder is None:  # pragma: no cover
                 continue
             try:
+                track = finder(langs)
                 raw = track.fetch()
-            except Exception as exc:  # pragma: no cover
-                log.warning("fetch failed for %s (%s): %s", video_id, kind, exc)
+            except Exception:
                 continue
             return Transcript(
                 video_id=video_id,
                 kind=kind,
-                lang=track.language_code,
-                cues=[
-                    TranscriptCue(
-                        t_start=float(c["start"]),
-                        t_end=float(c["start"]) + float(c.get("duration", 0.0)),
-                        text=c["text"],
-                    )
-                    for c in raw
-                ],
+                lang=getattr(track, "language_code", None),
+                cues=self._to_cues(raw),
             )
         return None
