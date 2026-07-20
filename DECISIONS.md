@@ -385,3 +385,25 @@ than speed:
 
 Queries are deduped on their *normalised* form, since that is the cache key: two
 queries normalising the same would otherwise build one page twice.
+
+## D37 — Golden-pick tooling refuses to fake human judgement
+`scripts/pick_golden.py` runs the real moment detector over real transcripts and
+prints each candidate with text and a jump link, so building the golden set is a
+short human job rather than a research project. It supports `--auto-top N` to
+pre-populate.
+
+Two guards, because the failure mode here is subtle and severe:
+
+1. Auto-picks are written with `human_reviewed: false`.
+2. **`eval/run.py` refuses to use unreviewed picks entirely.**
+
+Without guard 2, auto-generated picks would score the ranker against its own
+output — `overlap@k` would jump to something impressive and mean nothing. A
+circular eval that reads as validated is strictly worse than no eval, because it
+stops you looking. I generated a 29-pick file to test the tool, confirmed the
+eval ignored it, and deleted it: a file named "golden picks" that is not golden
+is a trap even with a flag on it.
+
+Making these real still requires a human watching video. It is the single
+highest-value thing standing between this project and knowing whether the
+ranking is any good.

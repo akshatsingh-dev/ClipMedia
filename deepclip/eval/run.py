@@ -49,6 +49,18 @@ def load_golden(slug: str) -> tuple[list[ClipRef], list[str]]:
     if not path.exists():
         return [], []
     data = json.loads(path.read_text())
+
+    # Picks produced by the same detector the eval scores are circular: overlap@k
+    # against them measures the ranker against its own output and would read as
+    # validation. Refuse them rather than quietly reporting a good number.
+    if not data.get("human_reviewed", False):
+        print(
+            f"  ! {slug}: golden picks are not human-reviewed; ignoring them "
+            f"(overlap@k would be circular)",
+            file=sys.stderr,
+        )
+        return [], data.get("coverage_goals", [])
+
     clips = [
         ClipRef(
             video_id=c["video_id"],
