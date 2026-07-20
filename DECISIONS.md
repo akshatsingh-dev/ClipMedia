@@ -239,3 +239,24 @@ channel was added and the composite moved +0.021.
 
 Worth recording because the page was hand-written by me and looked fine. This is
 the argument for building the harness before tuning ranking, exactly as C7 says.
+
+## D28 — Docker Hub is unreachable in this environment; the SQL is unexecuted
+Confirmed by attempting to pull `hello-world` (13KB): it times out, exactly like
+`pgvector/pgvector:pg16` did over an hour of trying. This is a hard environmental
+limit, not a slow network.
+
+Consequence: **every line of SQL in `packages/db/repo.py` has never been
+executed.** Unit tests cover the serialisation helpers around it, which is not
+the same thing and would not catch a syntax error, a wrong ON CONFLICT clause, or
+a bad pgvector cast.
+
+Rather than leave that gap implicit, `tests/test_db_integration.py` contains 21
+tests covering exactly what unit tests structurally cannot — schema application,
+HNSW index creation, vector round-trips, similarity ordering, the COALESCE-on-
+upsert behaviour, TTL expiry, and the build-claim lock. They run with one
+command once a database exists:
+
+    docker compose up -d postgres
+    DEEPCLIP_DB=1 python3 -m pytest tests/test_db_integration.py -q
+
+This is the highest-value unverified surface in the project.
