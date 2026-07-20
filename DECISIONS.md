@@ -355,3 +355,33 @@ and a real vector-search hit.
 
 This is the largest slice of the pipeline verifiable without API keys, and it
 exercises repo.py under realistic data rather than hand-built rows.
+
+## D35 — Whisper fallback: flagged off, audio deleted in a finally block
+Stage 4's last resort. Two hard constraints, both from the doc:
+
+1. **Audio is transient.** Downloaded to a temp dir, deleted in a `finally` so it
+   goes away even on a crash mid-transcription. Only text and timestamps are
+   stored. This is what keeps "embed, don't download" (B4) literally true — a
+   transient decode is not hosting, but a leftover file on disk would be. Two
+   tests assert the workdir is gone, including after an exception.
+2. **Off unless `DEEPCLIP_WHISPER=1`.** ~15% of videos lack captions and it costs
+   ~$0.006/min plus a GPU; paying for all of them implicitly would blow C8. There
+   is also a duration cap, since a 3-hour stream is not worth transcribing.
+
+The chain always tries free captions first and only reaches Whisper when they are
+genuinely absent — asserted by a test that fails if Whisper is called when
+captions exist.
+
+## D36 — Pre-builder is resumable, budgeted, and loud about failures
+C8's central bet is pre-building the top 5k pages. Three properties matter more
+than speed:
+
+- **Resumable** — progress lives in `deep_pages.status`, so a restart skips what
+  is built rather than paying twice. A 5k-page run *will* be interrupted.
+- **Budgeted** — stops on a dollar ceiling and on the YouTube quota, with a 500u
+  safety margin so the run ends cleanly rather than mid-page.
+- **Loud** — a page that fails silently is worse than one that never ran, because
+  it looks built. Failures are recorded and reported.
+
+Queries are deduped on their *normalised* form, since that is the cache key: two
+queries normalising the same would otherwise build one page twice.
