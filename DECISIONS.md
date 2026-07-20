@@ -154,3 +154,43 @@ because `is_disconnected()` never fires under TestClient. Both are now
 short values plus unroutable DSNs so no test can reach a real service.
 
 Suite went from hanging to 2.2s.
+
+## D18 — Orchestrator is queue-agnostic; the worker is a thin wrapper
+`pipeline/build.py` runs stages 1-7 with no arq/Redis imports, so it can be
+called from tests, a CLI, or a pre-building script (the C8 plan to pre-build the
+top 5k pages needs exactly that). `services/worker/main.py` only handles process
+concerns: dependency construction, Redis progress, persistence.
+
+## D19 — Degrade, never lose the page
+Three failure classes are treated as expected rather than exceptional:
+  - **Quota exhaustion mid-build** — remaining sections get no candidates, a
+    warning is recorded, and the page ships with what was retrieved. Quota
+    running out is the #1 stated MVP risk (D6); losing the whole build to it
+    would be the worst possible response.
+  - **A video with no transcript** — skipped. Below 50% coverage the result
+    carries a warning so the caller knows the page rests on a thin slice.
+  - **An exception fetching one transcript** — caught per video.
+
+Only three conditions raise `BuildFailed`: zero candidate videos, zero
+transcripts, zero usable moments. Each means there is genuinely no page to make.
+
+## D20 — Attribution is attached by us, never by the model
+`_attach_metadata` writes channel, title, credit URL (with timestamp) and
+thumbnail onto every clip after assembly. Asking the assembly model to emit
+attribution would leave it free to omit or invent it, and per-clip creator credit
+is the ToS posture and the creator-goodwill argument the whole product rests on
+(C5, B4).
+
+## D21 — Reel-import enforces platform rules structurally
+Instagram/TikTok import *raises* without user-supplied caption text rather than
+attempting any fetch, so there is no code path that could crawl them even by
+mistake. Instagram output is official oEmbed blockquote markup only. Both
+platforms always set `needs_confirmation`, since caption-only analysis is thin
+and the spec requires a one-tap user confirmation before building on it.
+
+## D22 — Bug: transcript-coverage warning never fired at the boundary
+The check was `len(transcripts) < len(all_ids) / 3`, so exactly one third
+coverage (1 of 3) compared 1 < 1.0 and produced no warning. Replaced with a named
+`MIN_TRANSCRIPT_COVERAGE = 0.5` ratio, which is both correct at the boundary and
+a more useful threshold — a page built on under half the retrieved candidates is
+worth flagging.
