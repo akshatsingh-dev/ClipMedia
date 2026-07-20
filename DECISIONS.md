@@ -260,3 +260,17 @@ command once a database exists:
     DEEPCLIP_DB=1 python3 -m pytest tests/test_db_integration.py -q
 
 This is the highest-value unverified surface in the project.
+
+## D29 — Repo hygiene: node_modules was committed, README was served as a web asset
+Two mistakes of mine, found while fixing a path error:
+
+1. `deepclip/apps/web/node_modules` was tracked — ~1,000 files of dependencies in
+   git. Added `.gitignore` and untracked it (plus `.next/` and `.pytest_cache/`).
+   Tracked files went from ~1,100 to 131.
+2. `README.md` was written into `deepclip/apps/web/public/`, because the shell
+   was still in that directory from an earlier debugging step. Next.js serves
+   `public/` verbatim, so the project README was being published at `/README.md`.
+   Moved to the repo root.
+
+Recorded rather than quietly fixed: both came from not checking where a `cat >`
+landed, and the second one shipped internal notes to a public path.
