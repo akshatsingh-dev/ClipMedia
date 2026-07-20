@@ -1,0 +1,311 @@
+"""YouTube SourceAdapter — discovery, metadata, transcript fallback chain.
+
+Quota is the binding constraint (master doc stage 2):
+  search.list  = 100 units   <- the expensive one
+  videos.list  =   1 unit    <- batch 50 ids/call
+Default allowance is 10k units/day, so an 8-chapter Learn page (~16 hints)
+burns ~1,600 units on search alone. Mitigations implemented here:
+  (b) hint_cache checked before any search, 30-day TTL
+  (c) videos.list batched 50 ids/call
+Mitigation (a), filing for a quota increase, is an ops task, not code.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Protocol
+
+from .base import (
+    SourceAdapter,
+    Transcript,
+    TranscriptCue,
+    VideoMeta,
+)
+
+log = logging.getLogger(__name__)
+
+SEARCH_COST_UNITS = 100
+VIDEOS_LIST_COST_UNITS = 1
+VIDEOS_LIST_BATCH = 50
+HINT_CACHE_TTL = timedelta(days=30)
+
+# Stage 3: no Shorts filter exists in the API, so detect post-hoc on duration.
+SHORTS_MAX_DURATION_S = 180
+
+_ISO8601_DURATION = re.compile(
+    r"^P(?:(?P<days>\d+)D)?T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?$"
+)
+
+
+def parse_iso8601_duration(value: str) -> int:
+    """YouTube returns contentDetails.duration as ISO-8601 (e.g. 'PT4M13S')."""
+    m = _ISO8601_DURATION.match(value or "")
+    if not m:
+        return 0
+    parts = {k: int(v) for k, v in m.groupdict(default="0").items()}
+    return (
+        parts["days"] * 86400
+        + parts["hours"] * 3600
+        + parts["minutes"] * 60
+        + parts["seconds"]
+    )
+
+
+def classify_source(duration_s: int | None) -> str:
+    """Stage 3 Shorts detection. Vertical-aspect check is a post-MVP refinement."""
+    if duration_s is not None and 0 < duration_s <= SHORTS_MAX_DURATION_S:
+        return "youtube_shorts"
+    return "youtube"
+
+
+class HintCache(Protocol):
+    def get(self, hint: str) -> tuple[list[str], datetime] | None: ...
+    def put(self, hint: str, video_ids: list[str]) -> None: ...
+
+
+class InMemoryHintCache:
+    """Default cache. Postgres-backed `hint_cache` table is the production impl."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, tuple[list[str], datetime]] = {}
+
+    def get(self, hint: str) -> tuple[list[str], datetime] | None:
+        return self._data.get(hint)
+
+    def put(self, hint: str, video_ids: list[str]) -> None:
+        self._data[hint] = (video_ids, datetime.now(timezone.utc))
+
+
+@dataclass
+class QuotaLedger:
+    """Tracks units spent so a run can be stopped before it blows the daily cap."""
+
+    daily_limit: int = 10_000
+    spent: int = 0
+
+    def charge(self, units: int) -> None:
+        if self.spent + units > self.daily_limit:
+            raise QuotaExceeded(
+                f"charging {units}u would exceed daily limit "
+                f"({self.spent}/{self.daily_limit} spent)"
+            )
+        self.spent += units
+
+    @property
+    def remaining(self) -> int:
+        return self.daily_limit - self.spent
+
+
+class QuotaExceeded(RuntimeError):
+    pass
+
+
+class YouTubeClient(Protocol):
+    """Thin seam over googleapiclient so tests can run without network or keys."""
+
+    def search_list(self, q: str, max_results: int) -> dict: ...
+    def videos_list(self, ids: list[str]) -> dict: ...
+
+
+class GoogleYouTubeClient:
+    """Real client. Requires YOUTUBE_API_KEY."""
+
+    def __init__(self, api_key: str | None = None):
+        key = api_key or os.environ.get("YOUTUBE_API_KEY")
+        if not key:
+            raise RuntimeError("YOUTUBE_API_KEY is not set")
+        from googleapiclient.discovery import build  # imported lazily
+
+        self._yt = build("youtube", "v3", developerKey=key, cache_discovery=False)
+
+    def search_list(self, q: str, max_results: int) -> dict:
+        return (
+            self._yt.search()
+            .list(
+                part="snippet",
+                q=q,
+                type="video",
+                maxResults=max_results,
+                videoEmbeddable="true",       # we only ever embed; unembeddable is useless
+                relevanceLanguage="en",
+            )
+            .execute()
+        )
+
+    def videos_list(self, ids: list[str]) -> dict:
+        return (
+            self._yt.videos()
+            .list(part="snippet,contentDetails,statistics", id=",".join(ids))
+            .execute()
+        )
+
+
+class YouTubeSource(SourceAdapter):
+    source = "youtube"
+
+    def __init__(
+        self,
+        client: YouTubeClient | None = None,
+        hint_cache: HintCache | None = None,
+        quota: QuotaLedger | None = None,
+        transcript_fetcher: "TranscriptFetcher | None" = None,
+    ):
+        self._client = client or GoogleYouTubeClient()
+        self._cache = hint_cache if hint_cache is not None else InMemoryHintCache()
+        self.quota = quota or QuotaLedger()
+        self._transcripts = transcript_fetcher or YouTubeTranscriptFetcher()
+
+    # -- discovery -------------------------------------------------------
+
+    def search(self, hint: str, max_results: int = 25) -> list[str]:
+        """Cache-first. A hit costs 0 quota units — that is the whole point."""
+        cached = self._cache.get(hint)
+        if cached is not None:
+            ids, fetched_at = cached
+            if datetime.now(timezone.utc) - fetched_at < HINT_CACHE_TTL:
+                log.debug("hint_cache hit: %s (%d ids, 0u)", hint, len(ids))
+                return ids
+
+        self.quota.charge(SEARCH_COST_UNITS)
+        resp = self._client.search_list(hint, max_results)
+        ids = [
+            item["id"]["videoId"]
+            for item in resp.get("items", [])
+            if item.get("id", {}).get("videoId")
+        ]
+        self._cache.put(hint, ids)
+        log.debug("search '%s' -> %d ids (%du)", hint, len(ids), SEARCH_COST_UNITS)
+        return ids
+
+    def search_with_shorts_variants(self, hint: str, max_results: int = 25) -> list[str]:
+        """Stage 3: also run the '#shorts' variant. Creators pre-clip the moment."""
+        ids = list(self.search(hint, max_results))
+        seen = set(ids)
+        for vid in self.search(f"{hint} #shorts", max_results):
+            if vid not in seen:
+                seen.add(vid)
+                ids.append(vid)
+        return ids
+
+    # -- metadata --------------------------------------------------------
+
+    def fetch_metadata(self, video_ids: list[str]) -> list[VideoMeta]:
+        """Batched 50/call at 1 unit each."""
+        out: list[VideoMeta] = []
+        for i in range(0, len(video_ids), VIDEOS_LIST_BATCH):
+            batch = video_ids[i : i + VIDEOS_LIST_BATCH]
+            self.quota.charge(VIDEOS_LIST_COST_UNITS)
+            resp = self._client.videos_list(batch)
+            for item in resp.get("items", []):
+                out.append(self._to_meta(item))
+        return out
+
+    @staticmethod
+    def _to_meta(item: dict) -> VideoMeta:
+        snippet = item.get("snippet", {})
+        stats = item.get("statistics", {})
+        details = item.get("contentDetails", {})
+        duration_s = parse_iso8601_duration(details.get("duration", ""))
+        published_at = None
+        if raw := snippet.get("publishedAt"):
+            published_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return VideoMeta(
+            id=item["id"],
+            source=classify_source(duration_s),
+            title=snippet.get("title"),
+            channel_id=snippet.get("channelId"),
+            channel_name=snippet.get("channelTitle"),
+            duration_s=duration_s,
+            published_at=published_at,
+            view_count=int(stats["viewCount"]) if "viewCount" in stats else None,
+            like_count=int(stats["likeCount"]) if "likeCount" in stats else None,
+            lang=snippet.get("defaultAudioLanguage") or snippet.get("defaultLanguage"),
+        )
+
+    # -- transcripts -----------------------------------------------------
+
+    def fetch_transcript(self, video_id: str) -> Transcript | None:
+        """Stage 4 chain: manual captions -> auto captions -> Whisper -> skip.
+
+        Whisper is the caller's job to wire (needs a GPU); this returns None so
+        the pipeline can decide whether the video is worth the spend.
+        """
+        return self._transcripts.fetch(video_id)
+
+    # -- playback --------------------------------------------------------
+
+    def embed_url(
+        self, video_id: str, t_start: float | None = None, t_end: float | None = None
+    ) -> str:
+        params = ["enablejsapi=1"]
+        if t_start is not None:
+            params.append(f"start={int(t_start)}")
+        if t_end is not None:
+            params.append(f"end={int(t_end)}")
+        return f"https://www.youtube.com/embed/{video_id}?{'&'.join(params)}"
+
+    @staticmethod
+    def credit_url(video_id: str, t_start: float | None = None) -> str:
+        """Link to the original. Non-negotiable per C5."""
+        base = f"https://www.youtube.com/watch?v={video_id}"
+        return f"{base}&t={int(t_start)}s" if t_start else base
+
+
+class TranscriptFetcher(Protocol):
+    def fetch(self, video_id: str) -> Transcript | None: ...
+
+
+class YouTubeTranscriptFetcher:
+    """youtube-transcript-api, preferring manual tracks over auto-generated.
+
+    `transcript_kind` is recorded because it is a ranking prior in stage 6 —
+    auto-captions mangle proper nouns ('Jinnah' -> 'gina').
+    """
+
+    def __init__(self, languages: tuple[str, ...] = ("en",)):
+        self.languages = languages
+
+    def fetch(self, video_id: str) -> Transcript | None:
+        try:
+            from youtube_transcript_api import YouTubeTranscriptApi
+        except ImportError:  # pragma: no cover
+            log.warning("youtube-transcript-api not installed")
+            return None
+
+        try:
+            listing = YouTubeTranscriptApi.list_transcripts(video_id)
+        except Exception as exc:
+            log.info("no transcript listing for %s: %s", video_id, exc)
+            return None
+
+        for kind, finder in (
+            ("manual", listing.find_manually_created_transcript),
+            ("auto", listing.find_generated_transcript),
+        ):
+            try:
+                track = finder(list(self.languages))
+            except Exception:
+                continue
+            try:
+                raw = track.fetch()
+            except Exception as exc:  # pragma: no cover
+                log.warning("fetch failed for %s (%s): %s", video_id, kind, exc)
+                continue
+            return Transcript(
+                video_id=video_id,
+                kind=kind,
+                lang=track.language_code,
+                cues=[
+                    TranscriptCue(
+                        t_start=float(c["start"]),
+                        t_end=float(c["start"]) + float(c.get("duration", 0.0)),
+                        text=c["text"],
+                    )
+                    for c in raw
+                ],
+            )
+        return None

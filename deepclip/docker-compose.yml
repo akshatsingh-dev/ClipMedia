@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: deepclip
+      POSTGRES_PASSWORD: deepclip
+      POSTGRES_DB: deepclip
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./packages/db/schema.sql:/docker-entrypoint-initdb.d/00-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deepclip"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: { context: ., dockerfile: services/api/Dockerfile }
+    environment:
+      DATABASE_URL: postgresql://deepclip:deepclip@postgres:5432/deepclip
+      REDIS_URL: redis://redis:6379
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  worker:
+    build: { context: ., dockerfile: services/worker/Dockerfile }
+    environment:
+      DATABASE_URL: postgresql://deepclip:deepclip@postgres:5432/deepclip
+      REDIS_URL: redis://redis:6379
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+volumes:
+  pgdata:
