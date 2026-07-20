@@ -119,8 +119,14 @@ def test_pgvector_roundtrip_full_dim():
 
 
 def test_video_row_defaults():
+    """credibility defaults to None, not 0.5.
+
+    The upsert COALESCEs it so a cheap metadata refresh cannot overwrite an
+    expensive LLM-computed score. A concrete default would defeat that — caught
+    by the DB integration suite, which is why this assertion changed.
+    """
     v = VideoRow(id="x", source="youtube")
-    assert v.credibility == 0.5
+    assert v.credibility is None
     assert v.transcript_kind is None
 
 

@@ -58,7 +58,10 @@ class VideoRow:
     like_count: int | None = None
     transcript_kind: str | None = None
     lang: str | None = None
-    credibility: float = 0.5
+    # None, not 0.5: the upsert COALESCEs this so a cheap metadata refresh does
+    # not overwrite an expensive LLM-computed score. A concrete 0.5 default here
+    # would defeat that and silently reset credibility on every refresh.
+    credibility: float | None = None
 
 
 @dataclass

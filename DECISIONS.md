@@ -321,3 +321,37 @@ consolidation, one was a real gap:
 Worth recording that a file-by-file diff against the spec found this. It was
 invisible from the test suite, which passed throughout: nothing tests that a
 feature's output is reachable.
+
+## D32 — Docker was a transient startup failure, not a proxy problem
+Third and final correction on this. `http.docker.internal:3128` is Docker
+Desktop's built-in transparent proxy — the default, not a misconfiguration, and
+the settings store contains no proxy override at all. After Docker Desktop had
+been running a while, `docker pull` simply worked. The earlier failures were the
+daemon still coming up.
+
+Lesson worth keeping: I asserted a cause twice on thin evidence before checking
+the settings file. "Pull hangs" was the observation; "Docker Hub unreachable" and
+then "misconfigured proxy" were both guesses stated as findings.
+
+## D33 — All SQL now executed; one real data-loss bug found
+With Postgres running, all 21 integration tests ran against real pgvector.
+20 passed. One failed, and it was exactly the class of bug unit tests cannot see:
+
+`VideoRow.credibility` defaulted to `0.5`, so a cheap metadata refresh sent a
+concrete `0.5` rather than NULL. `COALESCE(EXCLUDED.credibility, ...)` therefore
+saw a value and overwrote the stored score. **Every metadata refresh would have
+silently reset an expensive LLM-computed credibility score back to neutral** —
+invisible in production, and it would have quietly degraded Learn ranking over
+time.
+
+Fixed by defaulting the field to None so absence is real absence.
+
+## D34 — Full pipeline verified on real captions end to end
+`scripts/dry_run.py` runs real transcripts → sentences → moment detection →
+embedding → Postgres → vector search, with the LLM stages stubbed and the offline
+embedder. First run: 5/5 transcripts, 1854 sentences, 126 moments (4 junk
+dropped), 126 vectors, ranking honouring the >=2-channel rule, 126 rows inserted
+and a real vector-search hit.
+
+This is the largest slice of the pipeline verifiable without API keys, and it
+exercises repo.py under realistic data rather than hand-built rows.
