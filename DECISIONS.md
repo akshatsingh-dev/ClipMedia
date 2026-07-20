@@ -285,3 +285,16 @@ Two mistakes of mine, found while fixing a path error:
 
 Recorded rather than quietly fixed: both came from not checking where a `cat >`
 landed, and the second one shipped internal notes to a public path.
+
+## D30 — Stage 8 shipped off by default, with the cost cap as code
+Vision is the only stage whose cost scales with *clips* rather than *pages*, so
+an unbounded version would quietly dominate the C8 budget. Three guardrails:
+`DEEPCLIP_VISION` defaults off (post-MVP per spec), a hard 200-segment cap that
+truncates loudly, and it runs on final-round candidates only — after ranking, not
+before.
+
+Frames come from YouTube's public still-image endpoints. No video is downloaded,
+consistent with the constraint governing the whole architecture (B4).
+
+Failure degrades to empty tags: `visual_richness` is 0.10 of the ranking score,
+so losing it should cost a little quality, never a page.

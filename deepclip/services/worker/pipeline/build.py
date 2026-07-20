@@ -35,6 +35,7 @@ from .rank_entertain import build_feed
 from .rank_learn import Candidate, rank_chapter
 from .score import looks_like_junk, repair_names, score_segments
 from .segment import Segment
+from .vision import apply_vision, vision_enabled
 
 log = logging.getLogger(__name__)
 
@@ -298,6 +299,18 @@ def build_page(
 
     if not ranked:
         raise BuildFailed("ranking selected no clips")
+
+    # -- stage 8: vision (post-MVP, off unless DEEPCLIP_VISION is set) -----
+    # Runs on final-round candidates only: this is the one stage whose cost
+    # scales with clips rather than pages.
+    if vision_enabled():
+        final = [c for clips in ranked.values() for c in clips]
+        progress("assemble", "looking at frames", 0.0, {"segments": len(final)})
+        try:
+            apply_vision(final, deps.llm, mode=outline.mode)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("vision pass failed: %s", exc)
+            warnings.append(f"vision pass failed: {exc}")
 
     # -- stage 7: assembly ------------------------------------------------
     progress("assemble", "writing the page", 0.0, {})

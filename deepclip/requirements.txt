@@ -1,0 +1,15 @@
+# Pipeline + services
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+asyncpg==0.30.0
+arq==0.26.3
+redis==5.2.1
+anthropic==0.42.0
+google-api-python-client==2.156.0
+youtube-transcript-api==0.6.3
+certifi
+httpx==0.28.1
+
+# Embeddings (bge-m3 default). Heavy; see EMBEDDER env var for alternatives.
+sentence-transformers==3.3.1

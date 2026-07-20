@@ -55,6 +55,7 @@ class Candidate:
     title: str = ""
     is_short: bool = False
     embedding: list[float] = field(default_factory=list)
+    vis_tags: dict = field(default_factory=dict)  # stage 8, post-MVP
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
