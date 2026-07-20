@@ -1,0 +1,18 @@
+[
+  {
+    "slug": "how-neural-networks-work",
+    "title": "How Neural Networks Actually Work",
+    "subtitle": "From a single neuron to the transformers behind modern LLMs.",
+    "mode": "learn",
+    "query": "how neural networks work",
+    "clip_count": 17
+  },
+  {
+    "slug": "legendary-internet-moments",
+    "title": "Legendary Internet Moments",
+    "subtitle": "The clips that built the culture. Best 12, then it ends.",
+    "mode": "entertain",
+    "query": "legendary internet moments",
+    "clip_count": 12
+  }
+]

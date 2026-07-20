@@ -1,0 +1,240 @@
+{
+  "slug": "how-neural-networks-work",
+  "query": "how neural networks work",
+  "title": "How Neural Networks Actually Work",
+  "subtitle": "From a single neuron to the transformers behind modern LLMs.",
+  "mode": "learn",
+  "timestamps_verified": false,
+  "source_note": "Video metadata is real (resolved via YouTube oEmbed). Clip timestamps are unverified placeholders pending hand-curation.",
+  "chapters": [
+    {
+      "clips": [
+        {
+          "video_id": "rEDzUT3ymw4",
+          "t_start": 0,
+          "t_end": 62,
+          "why": "Sixty-second version of the whole idea \u2014 the hook before the depth.",
+          "credit_url": "https://www.youtube.com/watch?v=rEDzUT3ymw4&t=0s",
+          "video_title": "Explained In A Minute: Neural Networks",
+          "channel": "Samuel Arzt",
+          "channel_url": "https://www.youtube.com/@SamuelArzt",
+          "thumbnail": "https://i.ytimg.com/vi/rEDzUT3ymw4/hqdefault.jpg"
+        },
+        {
+          "video_id": "aircAruvnKk",
+          "t_start": 163,
+          "t_end": 397,
+          "why": "The canonical visual explanation of layers and activations.",
+          "credit_url": "https://www.youtube.com/watch?v=aircAruvnKk&t=163s",
+          "video_title": "But what is a neural network? | Deep learning chapter 1",
+          "channel": "3Blue1Brown",
+          "channel_url": "https://www.youtube.com/@3blue1brown",
+          "thumbnail": "https://i.ytimg.com/vi/aircAruvnKk/hqdefault.jpg"
+        },
+        {
+          "video_id": "VMj-3S1tku0",
+          "t_start": 240,
+          "t_end": 520,
+          "why": "Same concept from code rather than animation \u2014 a second voice on the basics.",
+          "credit_url": "https://www.youtube.com/watch?v=VMj-3S1tku0&t=240s",
+          "video_title": "The spelled-out intro to neural networks and backpropagation: building micrograd",
+          "channel": "Andrej Karpathy",
+          "channel_url": "https://www.youtube.com/@AndrejKarpathy",
+          "thumbnail": "https://i.ytimg.com/vi/VMj-3S1tku0/hqdefault.jpg"
+        }
+      ],
+      "title": "What a neural network is",
+      "intro_text": "Before the maths, the shape: layers of simple units, each passing a number forward. This is the picture everything else builds on."
+    },
+    {
+      "clips": [
+        {
+          "video_id": "IHZwWFHWa-w",
+          "t_start": 195,
+          "t_end": 480,
+          "why": "Builds the cost-function landscape intuition before any calculus.",
+          "credit_url": "https://www.youtube.com/watch?v=IHZwWFHWa-w&t=195s",
+          "video_title": "Gradient descent, how neural networks learn | Deep Learning Chapter 2",
+          "channel": "3Blue1Brown",
+          "channel_url": "https://www.youtube.com/@3blue1brown",
+          "thumbnail": "https://i.ytimg.com/vi/IHZwWFHWa-w/hqdefault.jpg"
+        },
+        {
+          "video_id": "VMj-3S1tku0",
+          "t_start": 1450,
+          "t_end": 1720,
+          "why": "Watches a real loss actually go down in code.",
+          "credit_url": "https://www.youtube.com/watch?v=VMj-3S1tku0&t=1450s",
+          "video_title": "The spelled-out intro to neural networks and backpropagation: building micrograd",
+          "channel": "Andrej Karpathy",
+          "channel_url": "https://www.youtube.com/@AndrejKarpathy",
+          "thumbnail": "https://i.ytimg.com/vi/VMj-3S1tku0/hqdefault.jpg"
+        }
+      ],
+      "title": "How a network learns: gradient descent",
+      "intro_text": "A network starts random and wrong. Learning is the search for the downhill direction in a space with millions of dimensions."
+    },
+    {
+      "clips": [
+        {
+          "video_id": "Ilg3gGewQ5U",
+          "t_start": 82,
+          "t_end": 400,
+          "why": "The intuition pass: what each weight nudge is trying to accomplish.",
+          "credit_url": "https://www.youtube.com/watch?v=Ilg3gGewQ5U&t=82s",
+          "video_title": "Backpropagation, intuitively | Deep Learning Chapter 3",
+          "channel": "3Blue1Brown",
+          "channel_url": "https://www.youtube.com/@3blue1brown",
+          "thumbnail": "https://i.ytimg.com/vi/Ilg3gGewQ5U/hqdefault.jpg"
+        },
+        {
+          "video_id": "tIeHLnjs5U8",
+          "t_start": 60,
+          "t_end": 340,
+          "why": "The same mechanism with the chain rule made explicit.",
+          "credit_url": "https://www.youtube.com/watch?v=tIeHLnjs5U8&t=60s",
+          "video_title": "Backpropagation calculus | Deep Learning Chapter 4",
+          "channel": "3Blue1Brown",
+          "channel_url": "https://www.youtube.com/@3blue1brown",
+          "thumbnail": "https://i.ytimg.com/vi/tIeHLnjs5U8/hqdefault.jpg"
+        },
+        {
+          "video_id": "VMj-3S1tku0",
+          "t_start": 3100,
+          "t_end": 3400,
+          "why": "Backprop implemented by hand, so it stops being a black box.",
+          "credit_url": "https://www.youtube.com/watch?v=VMj-3S1tku0&t=3100s",
+          "video_title": "The spelled-out intro to neural networks and backpropagation: building micrograd",
+          "channel": "Andrej Karpathy",
+          "channel_url": "https://www.youtube.com/@AndrejKarpathy",
+          "thumbnail": "https://i.ytimg.com/vi/VMj-3S1tku0/hqdefault.jpg"
+        }
+      ],
+      "title": "Backpropagation",
+      "intro_text": "The algorithm that makes the search tractable \u2014 and the one most people nod along to without ever quite getting."
+    },
+    {
+      "clips": [
+        {
+          "video_id": "UZDiGooFs54",
+          "t_start": 120,
+          "t_end": 460,
+          "why": "The moment the field turned, told as history rather than theory.",
+          "credit_url": "https://www.youtube.com/watch?v=UZDiGooFs54&t=120s",
+          "video_title": "The moment we stopped understanding AI [AlexNet]",
+          "channel": "Welch Labs",
+          "channel_url": "https://www.youtube.com/@WelchLabs",
+          "thumbnail": "https://i.ytimg.com/vi/UZDiGooFs54/hqdefault.jpg"
+        },
+        {
+          "video_id": "5MdSE-N0bxs",
+          "t_start": 300,
+          "t_end": 620,
+          "why": "An academic framing of why depth generalises at all.",
+          "credit_url": "https://www.youtube.com/watch?v=5MdSE-N0bxs&t=300s",
+          "video_title": "Connections between physics and deep learning",
+          "channel": "MITCBMM",
+          "channel_url": "https://www.youtube.com/@MITCBMM",
+          "thumbnail": "https://i.ytimg.com/vi/5MdSE-N0bxs/hqdefault.jpg"
+        }
+      ],
+      "title": "Why depth suddenly worked: AlexNet",
+      "intro_text": "The historical break. Deep networks were a curiosity until a 2012 result made them impossible to ignore."
+    },
+    {
+      "clips": [
+        {
+          "video_id": "wjZofJX0v4M",
+          "t_start": 130,
+          "t_end": 470,
+          "why": "Clearest visual account of what a transformer does end to end.",
+          "credit_url": "https://www.youtube.com/watch?v=wjZofJX0v4M&t=130s",
+          "video_title": "Transformers, the tech behind LLMs | Deep Learning Chapter 5",
+          "channel": "3Blue1Brown",
+          "channel_url": "https://www.youtube.com/@3blue1brown",
+          "thumbnail": "https://i.ytimg.com/vi/wjZofJX0v4M/hqdefault.jpg"
+        },
+        {
+          "video_id": "eMlx5fFNoYc",
+          "t_start": 95,
+          "t_end": 430,
+          "why": "Attention specifically, step by step.",
+          "credit_url": "https://www.youtube.com/watch?v=eMlx5fFNoYc&t=95s",
+          "video_title": "Attention in transformers, step-by-step | Deep Learning Chapter 6",
+          "channel": "3Blue1Brown",
+          "channel_url": "https://www.youtube.com/@3blue1brown",
+          "thumbnail": "https://i.ytimg.com/vi/eMlx5fFNoYc/hqdefault.jpg"
+        },
+        {
+          "video_id": "bCz4OMemCcA",
+          "t_start": 420,
+          "t_end": 760,
+          "why": "Ties the animation back to the original paper's notation.",
+          "credit_url": "https://www.youtube.com/watch?v=bCz4OMemCcA&t=420s",
+          "video_title": "Attention is all you need (Transformer) - Model explanation (including math), Inference and Training",
+          "channel": "Umar Jamil",
+          "channel_url": "https://www.youtube.com/@umarjamilai",
+          "thumbnail": "https://i.ytimg.com/vi/bCz4OMemCcA/hqdefault.jpg"
+        }
+      ],
+      "title": "Transformers and attention",
+      "intro_text": "The architecture behind every current large language model, and the one idea inside it that does the real work."
+    },
+    {
+      "clips": [
+        {
+          "video_id": "kCc8FmEb1nY",
+          "t_start": 500,
+          "t_end": 850,
+          "why": "A working GPT written live, small enough to follow.",
+          "credit_url": "https://www.youtube.com/watch?v=kCc8FmEb1nY&t=500s",
+          "video_title": "Let's build GPT: from scratch, in code, spelled out.",
+          "channel": "Andrej Karpathy",
+          "channel_url": "https://www.youtube.com/@AndrejKarpathy",
+          "thumbnail": "https://i.ytimg.com/vi/kCc8FmEb1nY/hqdefault.jpg"
+        },
+        {
+          "video_id": "l8pRSuU81PU",
+          "t_start": 300,
+          "t_end": 640,
+          "why": "What changes when the same ideas meet real scale.",
+          "credit_url": "https://www.youtube.com/watch?v=l8pRSuU81PU&t=300s",
+          "video_title": "Let's reproduce GPT-2 (124M)",
+          "channel": "Andrej Karpathy",
+          "channel_url": "https://www.youtube.com/@AndrejKarpathy",
+          "thumbnail": "https://i.ytimg.com/vi/l8pRSuU81PU/hqdefault.jpg"
+        }
+      ],
+      "title": "Building one yourself",
+      "intro_text": "Understanding ends where implementation begins. Two builds, from toy GPT to a real reproduction."
+    },
+    {
+      "clips": [
+        {
+          "video_id": "R9OHn5ZF4Uo",
+          "t_start": 60,
+          "t_end": 400,
+          "why": "The strongest short argument against over-reading benchmark scores.",
+          "credit_url": "https://www.youtube.com/watch?v=R9OHn5ZF4Uo&t=60s",
+          "video_title": "AI Doesn't Know Anything. It Just Passes Tests.",
+          "channel": "CGP Grey",
+          "channel_url": "https://www.youtube.com/@CGPGrey",
+          "thumbnail": "https://i.ytimg.com/vi/R9OHn5ZF4Uo/hqdefault.jpg"
+        },
+        {
+          "video_id": "zjkBMFhNj_g",
+          "t_start": 1800,
+          "t_end": 2150,
+          "why": "A practitioner's account of the same limits, from the inside.",
+          "credit_url": "https://www.youtube.com/watch?v=zjkBMFhNj_g&t=1800s",
+          "video_title": "[1hr Talk] Intro to Large Language Models",
+          "channel": "Andrej Karpathy",
+          "channel_url": "https://www.youtube.com/@AndrejKarpathy",
+          "thumbnail": "https://i.ytimg.com/vi/zjkBMFhNj_g/hqdefault.jpg"
+        }
+      ],
+      "title": "What these models don't do",
+      "intro_text": "A closing corrective. Capability benchmarks and understanding are not the same claim."
+    }
+  ]
+}
