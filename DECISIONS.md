@@ -298,3 +298,26 @@ consistent with the constraint governing the whole architecture (B4).
 
 Failure degrades to empty tags: `visual_richness` is 0.10 of the ranking score,
 so losing it should cost a little quality, never a page.
+
+## D31 — Gap check against the spec's file layout
+Compared the repo against the C6 structure. Five differences; four are deliberate
+consolidation, one was a real gap:
+
+- `services/api/sse.py` → SSE lives in `progress.py` + the route in `main.py`.
+  Same functionality, split along a more useful seam (the bus is reusable by the
+  worker over Redis).
+- `pipeline/retrieve.py`, `pipeline/transcripts.py` → inline in `build.py` and
+  `sources/youtube.py`. Both are thin orchestration over the source adapter;
+  separate modules would have been indirection without a second caller.
+- `sources/youtube_shorts.py` → Shorts are not a separate source, they are a
+  post-hoc classification of a YouTube video (`classify_source` on duration).
+  A second adapter would have duplicated the entire client for one boolean.
+- **`apps/web/app/path/[id]/page.tsx` → genuinely missing.** Reel-import wrote to
+  `learning_paths` and the API served `/api/paths/{id}`, but nothing rendered it,
+  so the wedge feature's output was unreachable. Now built, server-rendered so the
+  OG share card resolves — the share loop is the whole point of the feature and a
+  client-only page gives crawlers nothing.
+
+Worth recording that a file-by-file diff against the spec found this. It was
+invisible from the test suite, which passed throughout: nothing tests that a
+feature's output is reachable.
