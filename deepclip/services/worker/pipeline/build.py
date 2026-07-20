@@ -22,6 +22,12 @@ from typing import Any, Callable, Sequence
 from ..llm.client import LLMClient
 from ..sources.youtube import QuotaExceeded, YouTubeSource
 from .assemble import assemble_entertain, assemble_learn
+from .credibility import (
+    DEFAULT_CREDIBILITY,
+    enforce_contested_selection,
+    score_channel,
+    seed_credibility,
+)
 from .embed import Embedder, embed_texts
 from .moments import detect_moments
 from .outline import Outline, build_outline
@@ -221,6 +227,33 @@ def build_page(
             cand.intensity = score
     progress("score", "scored", 1.0, {})
 
+    # -- C4: channel credibility (Learn only) -----------------------------
+    # Scored once per channel, not per video: credibility is a channel property
+    # and re-scoring per candidate would be pure waste.
+    if outline.mode == "learn":
+        cred_by_channel: dict[str, float] = {}
+        samples_by_channel: dict[str, list[str]] = {}
+        for c in all_candidates:
+            if c.channel_id:
+                samples_by_channel.setdefault(c.channel_id, []).append(c.text)
+        for channel_id, samples in samples_by_channel.items():
+            pinned = seed_credibility(channel_id)
+            if pinned is not None:
+                cred_by_channel[channel_id] = pinned
+                continue
+            name = next(
+                (m.channel_name for m in metas.values() if m.channel_id == channel_id),
+                channel_id,
+            )
+            try:
+                score, _ = score_channel(channel_id, name or channel_id, samples, deps.llm)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("credibility scoring failed for %s: %s", channel_id, exc)
+                score = DEFAULT_CREDIBILITY
+            cred_by_channel[channel_id] = score
+        for c in all_candidates:
+            c.credibility = cred_by_channel.get(c.channel_id, DEFAULT_CREDIBILITY)
+
     # -- stage 6: ranking -------------------------------------------------
     progress("rank", "ranking", 0.0, {})
     by_video = {vid: rows for vid, rows in candidates_by_video.items() if rows}
@@ -245,9 +278,14 @@ def build_page(
     if outline.mode == "learn":
         ranked = {}
         used: set[tuple[str, float]] = set()
+        contested_labels = {c.title: c.contested for c in outline.chapters}
         for label, pool in section_candidates.items():
             fresh = [c for c in pool if (c.video_id, c.t_start) not in used]
             picked = rank_chapter(fresh)
+            if picked and contested_labels.get(label):
+                # Contested history through one voice is the failure mode the
+                # spec calls out; require two credible, differently-framed sources.
+                picked = enforce_contested_selection(picked)
             if picked:
                 ranked[label] = picked
                 used.update((c.video_id, c.t_start) for c in picked)

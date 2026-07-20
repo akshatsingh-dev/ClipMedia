@@ -1,0 +1,15 @@
+{
+  "slug": "how-neural-networks-work",
+  "coverage_recall": 1.0,
+  "overlap_at_k": 0.0,
+  "redundancy_rate": 0.0065,
+  "junk_rate": 0.0,
+  "channel_diversity": 1.0,
+  "judge_score": null,
+  "composite": 0.6993,
+  "notes": [
+    "no golden clips supplied; overlap_at_k is not meaningful",
+    "no coverage goals supplied; coverage_recall defaulted to 1.0"
+  ],
+  "delta": 0.0207
+}

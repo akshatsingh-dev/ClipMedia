@@ -203,6 +203,17 @@
           "channel": "Andrej Karpathy",
           "channel_url": "https://www.youtube.com/@AndrejKarpathy",
           "thumbnail": "https://i.ytimg.com/vi/l8pRSuU81PU/hqdefault.jpg"
+        },
+        {
+          "video_id": "bCz4OMemCcA",
+          "t_start": 1100,
+          "t_end": 1420,
+          "why": "The same build traced back to the original paper's structure.",
+          "credit_url": "https://www.youtube.com/watch?v=bCz4OMemCcA&t=1100s",
+          "video_title": "Attention is all you need (Transformer) - Model explanation (including math), Inference and Training",
+          "channel": "Umar Jamil",
+          "channel_url": "https://www.youtube.com/@umarjamilai",
+          "thumbnail": "https://i.ytimg.com/vi/bCz4OMemCcA/hqdefault.jpg"
         }
       ],
       "title": "Building one yourself",

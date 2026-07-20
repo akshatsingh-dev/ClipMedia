@@ -210,3 +210,32 @@ clock), so the bar does not sit at 20% for most of a build.
 
 The effect guards against React StrictMode double-invocation — without it, dev
 mode would enqueue every build twice, and each build costs about a dollar.
+
+## D25 — Credibility is scored per channel, cached, and never punishes the unknown
+C4 scoring runs once per channel per build, not per video. Allowlisted channels
+skip the model entirely. Any failure — no samples, malformed response, exception
+— returns the neutral 0.5 rather than a low score: an unscored channel must not
+be treated as untrustworthy, which would silently bury new creators.
+
+Contested chapters (flagged by stage 1) go through `enforce_contested_selection`,
+requiring >=2 channels above 0.7 with differing framing. If the corpus genuinely
+cannot satisfy it, the original selection stands — a thin chapter beats fabricated
+balance.
+
+## D26 — Eval harness reports its own untrustworthiness
+The metrics run, but there are no hand-picked golden timestamps yet (D3), so
+`overlap_at_k` compares against nothing and reads 0.000. Rather than let a green
+composite imply the ranking is validated, `eval/run.py` prints a loud warning
+naming every page without golden picks and marks the ship gate untrustworthy.
+
+A metric that silently measures nothing is worse than no metric, because it
+looks like evidence.
+
+## D27 — The eval immediately caught a real defect in the golden page
+First run reported `channel_diversity 0.857` on the Learn page: the "Building one
+yourself" chapter had two Karpathy clips and no second voice, violating the
+>=2-distinct-channels rule (C6) that the ranker is supposed to enforce. A third
+channel was added and the composite moved +0.021.
+
+Worth recording because the page was hand-written by me and looked fine. This is
+the argument for building the harness before tuning ranking, exactly as C7 says.

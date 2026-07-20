@@ -103,6 +103,11 @@ LEARN_NEURAL_NETWORKS = {
                  "why": "A working GPT written live, small enough to follow."},
                 {"video_id": "l8pRSuU81PU", "t_start": 300, "t_end": 640,
                  "why": "What changes when the same ideas meet real scale."},
+                # Third voice: the two above are both Karpathy, and a chapter
+                # from a single channel violates the >=2-channels rule (C6).
+                # The eval harness caught this.
+                {"video_id": "bCz4OMemCcA", "t_start": 1100, "t_end": 1420,
+                 "why": "The same build traced back to the original paper's structure."},
             ],
         },
         {
