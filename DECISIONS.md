@@ -194,3 +194,19 @@ coverage (1 of 3) compared 1 < 1.0 and produced no warning. Replaced with a name
 `MIN_TRANSCRIPT_COVERAGE = 0.5` ratio, which is both correct at the boundary and
 a more useful threshold — a page built on under half the retrieved candidates is
 worth flagging.
+
+## D23 — Frontend degrades to fixtures when the API is down
+`lib/api.ts` tries the FastAPI gateway with a 2.5s timeout and falls back to
+fixture JSON. Live building genuinely cannot work without keys + Postgres +
+Redis + a worker, so the app treats a missing API as a normal state rather than
+an error: prebuilt pages stay browsable, and the /build route explains exactly
+what is missing instead of surfacing a bare "Failed to fetch".
+
+## D24 — Build stream renders the outline before any clip exists
+Stage 1 emits chapter titles, and BuildStream renders them immediately. This is
+the C5 perceived-latency claim made real: a 60s build shows the shape of the page
+in ~5s. Progress is weighted per stage (retrieval and transcripts dominate wall
+clock), so the bar does not sit at 20% for most of a build.
+
+The effect guards against React StrictMode double-invocation — without it, dev
+mode would enqueue every build twice, and each build costs about a dollar.

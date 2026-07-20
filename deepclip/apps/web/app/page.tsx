@@ -1,4 +1,5 @@
 import Link from "next/link";
+import SearchBox from "@/components/SearchBox";
 import { getIndex } from "@/lib/pages";
 
 export default function Home() {
@@ -17,6 +18,9 @@ export default function Home() {
           Real video moments, jumped to the exact timestamp, sequenced into
           something worth finishing. No generated footage. No infinite feed.
         </p>
+        <div className="mt-8">
+          <SearchBox />
+        </div>
       </header>
 
       <section className="space-y-3">
