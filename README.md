@@ -66,7 +66,7 @@ is the main risk in the project, so it is stated plainly rather than buried:
 
 | Surface | Why | How to close it |
 |---|---|---|
-| **All SQL** (`packages/db/repo.py`) | Docker Hub is unreachable in the build environment — even a 13KB image will not pull | `docker compose up -d postgres && DEEPCLIP_DB=1 python3 -m pytest tests/test_db_integration.py -q` (21 tests ready) |
+| **All SQL** (`packages/db/repo.py`) | `docker pull` hangs — Docker Desktop is set to proxy through `http.docker.internal:3128`, which is not responding (the network itself is fine) | Settings → Resources → Proxies → "No proxy", restart Docker, then `docker compose up -d postgres && DEEPCLIP_DB=1 python3 -m pytest tests/test_db_integration.py -q` (21 tests ready) |
 | **Every LLM stage** (1, 5, 7, credibility, judge) | No `ANTHROPIC_API_KEY` | Set the key, then `python3 -m eval.run --judge` |
 | **Video playback** | YouTube embeds do not render in the automated browser used here | Open the app in a normal browser |
 

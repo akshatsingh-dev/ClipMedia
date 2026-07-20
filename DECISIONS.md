@@ -240,21 +240,32 @@ channel was added and the composite moved +0.021.
 Worth recording because the page was hand-written by me and looked fine. This is
 the argument for building the harness before tuning ranking, exactly as C7 says.
 
-## D28 — Docker Hub is unreachable in this environment; the SQL is unexecuted
-Confirmed by attempting to pull `hello-world` (13KB): it times out, exactly like
-`pgvector/pgvector:pg16` did over an hour of trying. This is a hard environmental
-limit, not a slow network.
+## D28 — Docker pulls hang behind a misconfigured proxy; the SQL is unexecuted
+**Corrected.** I first concluded "Docker Hub is unreachable" after `hello-world`
+(13KB) failed to pull. That claim was wrong, and the evidence was weak — the task
+had been killed, not cleanly failed.
 
-Consequence: **every line of SQL in `packages/db/repo.py` has never been
-executed.** Unit tests cover the serialisation helpers around it, which is not
-the same thing and would not catch a syntax error, a wrong ON CONFLICT clause, or
-a bad pgvector cast.
+Direct check: `auth.docker.io` returns 200 and `registry-1.docker.io` returns 401
+(the expected unauthenticated response), both under 250ms. The network is fine.
 
-Rather than leave that gap implicit, `tests/test_db_integration.py` contains 21
-tests covering exactly what unit tests structurally cannot — schema application,
-HNSW index creation, vector round-trips, similarity ordering, the COALESCE-on-
-upsert behaviour, TTL expiry, and the build-claim lock. They run with one
-command once a database exists:
+Actual cause: Docker Desktop is configured with
+`HTTP/HTTPS Proxy: http.docker.internal:3128`, which is not responding. Every
+`docker pull` hangs on it while plain HTTPS works. This is a Docker Desktop
+setting on the user's machine — possibly deliberate — so it has been left alone
+and reported rather than changed.
+
+Fix (user's call): Docker Desktop → Settings → Resources → Proxies → set to
+"No proxy" or "System", then restart Docker Desktop.
+
+Consequence either way: **every line of SQL in `packages/db/repo.py` has never
+been executed.** Unit tests cover the serialisation helpers around it, which
+would not catch a syntax error, a wrong ON CONFLICT clause, or a bad pgvector
+cast.
+
+`tests/test_db_integration.py` holds 21 tests covering exactly what unit tests
+structurally cannot — schema application, HNSW index creation, vector
+round-trips, similarity ordering, COALESCE-on-upsert, TTL expiry, and the
+build-claim lock:
 
     docker compose up -d postgres
     DEEPCLIP_DB=1 python3 -m pytest tests/test_db_integration.py -q
