@@ -159,6 +159,19 @@ class WhisperTranscriber:
         )
 
 
+# One shared transcriber per process, so the Whisper model is loaded once rather
+# than per video. Loading it per call (the previous behaviour) dominated a build's
+# wall-clock. Guarded because a build is single-threaded through this path.
+_SHARED_TRANSCRIBER: "WhisperTranscriber | None" = None
+
+
+def _shared_transcriber() -> "WhisperTranscriber":
+    global _SHARED_TRANSCRIBER
+    if _SHARED_TRANSCRIBER is None:
+        _SHARED_TRANSCRIBER = WhisperTranscriber()
+    return _SHARED_TRANSCRIBER
+
+
 def fetch_with_whisper_fallback(
     video_id: str,
     caption_fetcher,
@@ -184,4 +197,4 @@ def fetch_with_whisper_fallback(
         return transcript
     if not whisper_enabled():
         return None
-    return (transcriber or WhisperTranscriber()).transcribe(video_id)
+    return (transcriber or _shared_transcriber()).transcribe(video_id)
