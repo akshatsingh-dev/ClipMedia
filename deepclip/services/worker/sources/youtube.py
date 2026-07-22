@@ -259,18 +259,54 @@ class TranscriptFetcher(Protocol):
     def fetch(self, video_id: str) -> Transcript | None: ...
 
 
+class TranscriptIpBlocked(RuntimeError):
+    """YouTube is blocking transcript requests from this IP.
+
+    Distinct from "this video has no captions": the block is an infra condition
+    affecting *every* video, is transient, and is fixed by a proxy or by waiting.
+    Surfacing it as a distinct error stops a build from reporting "no captions
+    anywhere" — a misleading message that hides the real cause. This is the B4
+    fragility (transcript scraping) made concrete.
+    """
+
+
 class YouTubeTranscriptFetcher:
     """youtube-transcript-api, preferring manual tracks over auto-generated.
 
     `transcript_kind` is recorded because it is a ranking prior in stage 6 —
     auto-captions mangle proper nouns ('Jinnah' -> 'gina').
+
+    Proxy support (env): YouTube IP-blocks the scraped caption endpoint under
+    load, which is the single biggest reliability risk in the pipeline. Set
+    `YTT_PROXY_HTTP` / `YTT_PROXY_HTTPS` (generic) or `WEBSHARE_PROXY_USER` /
+    `WEBSHARE_PROXY_PASS` (Webshare residential) to route around it in production.
     """
 
     def __init__(self, languages: tuple[str, ...] = ("en",)):
         self.languages = languages
+        self._proxy_config = self._build_proxy_config()
 
     @staticmethod
-    def _listing(video_id: str):
+    def _build_proxy_config():
+        """Construct a proxy config from env, if any. None means direct."""
+        try:
+            user = os.environ.get("WEBSHARE_PROXY_USER")
+            pw = os.environ.get("WEBSHARE_PROXY_PASS")
+            if user and pw:
+                from youtube_transcript_api.proxies import WebshareProxyConfig
+
+                return WebshareProxyConfig(proxy_username=user, proxy_password=pw)
+            http = os.environ.get("YTT_PROXY_HTTP")
+            https = os.environ.get("YTT_PROXY_HTTPS")
+            if http or https:
+                from youtube_transcript_api.proxies import GenericProxyConfig
+
+                return GenericProxyConfig(http_url=http, https_url=https or http)
+        except Exception as exc:  # noqa: BLE001 - proxy is optional
+            log.warning("proxy config unavailable: %s", exc)
+        return None
+
+    def _listing(self, video_id: str):
         """Handle both library generations.
 
         >=1.0 exposes instance methods (`.list()`); older releases used the
@@ -281,7 +317,8 @@ class YouTubeTranscriptFetcher:
 
         if hasattr(YouTubeTranscriptApi, "list_transcripts"):
             return YouTubeTranscriptApi.list_transcripts(video_id)
-        return YouTubeTranscriptApi().list(video_id)
+        kwargs = {"proxy_config": self._proxy_config} if self._proxy_config else {}
+        return YouTubeTranscriptApi(**kwargs).list(video_id)
 
     @staticmethod
     def _to_cues(raw) -> list[TranscriptCue]:
@@ -308,6 +345,11 @@ class YouTubeTranscriptFetcher:
             log.warning("youtube-transcript-api not installed")
             return None
         except Exception as exc:
+            # An IP block affects every request, so it must not be swallowed as
+            # "this one video has no captions" — raise it so the build reports
+            # the real cause and can stop early instead of failing on all videos.
+            if type(exc).__name__ in {"IpBlocked", "RequestBlocked"} or "blocking requests from your IP" in str(exc):
+                raise TranscriptIpBlocked(str(exc)[:200]) from exc
             log.info("no transcript listing for %s: %s", video_id, exc)
             return None
 

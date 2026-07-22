@@ -221,6 +221,9 @@ def assemble_learn(
                     "t_start": cand.t_start,
                     "t_end": cand.t_end,
                     "why": str(mc.get("why", "")).strip(),
+                    # Stored so the "ask about this clip" tutor (B1) can answer
+                    # grounded in the exact moment without re-fetching anything.
+                    "transcript": cand.text,
                 }
             )
         if clips_out:
@@ -275,6 +278,9 @@ def assemble_entertain(
                     "t_start": cand.t_start,
                     "t_end": cand.t_end,
                     "why": str(mc.get("why", "")).strip(),
+                    # Stored so the "ask about this clip" tutor (B1) can answer
+                    # grounded in the exact moment without re-fetching anything.
+                    "transcript": cand.text,
                 }
             )
         if clips_out:

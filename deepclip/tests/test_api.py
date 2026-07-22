@@ -478,3 +478,52 @@ def test_reports_endpoint(client):
 def test_reports_503_without_db(client):
     client.app.state.repo = None
     assert client.get("/api/reports").status_code == 503
+
+
+# -- tutor --------------------------------------------------------------
+
+
+class TutorFakeRepo(FakeRepo):
+    def __init__(self, page=None):
+        super().__init__()
+        self._page = page
+
+    async def get_page(self, slug):
+        return self._page
+
+
+TUTOR_PAGE = {
+    "query_norm": "g", "mode": "learn", "status": "ready",
+    "page": {"chapters": [{"title": "C", "clips": [
+        {"video_id": "v1", "t_start": 100, "transcript": "the march covered 240 miles"}
+    ]}]},
+}
+
+
+def test_tutor_answers(client):
+    from services.worker.llm.client import FakeLLMClient
+    client.app.state.repo = TutorFakeRepo(TUTOR_PAGE)
+    client.app.state.llm = FakeLLMClient(responses=["240 miles."])
+    r = client.post("/api/tutor", json={"slug": "g", "video_id": "v1", "t_start": 100, "question": "how far?"})
+    assert r.status_code == 200
+    assert "240" in r.json()["answer"]
+
+
+def test_tutor_404_when_page_missing(client):
+    client.app.state.repo = TutorFakeRepo(None)
+    r = client.post("/api/tutor", json={"slug": "g", "video_id": "v1", "t_start": 100, "question": "q"})
+    assert r.status_code == 404
+
+
+def test_tutor_404_when_clip_not_on_page(client):
+    from services.worker.llm.client import FakeLLMClient
+    client.app.state.repo = TutorFakeRepo(TUTOR_PAGE)
+    client.app.state.llm = FakeLLMClient(responses=["x"])
+    r = client.post("/api/tutor", json={"slug": "g", "video_id": "OTHER", "t_start": 100, "question": "q"})
+    assert r.status_code == 404
+
+
+def test_tutor_validates_question(client):
+    client.app.state.repo = TutorFakeRepo(TUTOR_PAGE)
+    r = client.post("/api/tutor", json={"slug": "g", "video_id": "v1", "t_start": 100, "question": ""})
+    assert r.status_code == 422

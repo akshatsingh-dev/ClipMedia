@@ -537,3 +537,43 @@ First real LLM calls, against the user's Gemini key. Findings:
 This is the fifth time this session that contact with reality corrected
 something fakes had passed. The pattern is now the strongest evidence in the
 project for running things for real early.
+
+## D46 — Real end-to-end validation: the whole pipeline runs, and the transcript layer is the real risk
+Ran full real builds (YouTube + Gemini + Gemini embeddings + Postgres). Findings,
+in order of importance:
+
+1. **The pipeline works end to end.** A real build went outline → 69 videos
+   retrieved → 31 transcripts → moments from all 31 → embedding, entirely on real
+   infra. Stage 1 and retrieval are validated against production APIs.
+
+2. **The transcript layer is the single biggest reliability risk — confirmed
+   live.** After the heavy first run, `youtube-transcript-api` started returning
+   `IpBlocked` for every video: YouTube blocks the scraped caption endpoint under
+   load. This is the B4 fragility made concrete, and it takes down the whole
+   pipeline (no transcripts → no moments → no page). Mitigations added:
+   - **Proxy support** (`YTT_PROXY_*` / `WEBSHARE_PROXY_*`) — what production
+     transcript services actually use to avoid IP blocks.
+   - A distinct `TranscriptIpBlocked` error so a block is not swallowed as "this
+     video has no captions". The build stops early on a block and reports the real
+     cause with the fix, instead of grinding through every video and failing with a
+     misleading message.
+   - The Whisper fallback (already built, flagged off) is the other escape hatch.
+   The honest position: **for reliable production, this needs either residential
+   proxies or Whisper — IP-based scraping alone will not hold.**
+
+3. **Free-tier limits bind before cost does.** Gemini free-tier embedding
+   request quota (429) and pro-model access (429) are the practical ceiling, not
+   dollars. Handled with backoff + the cost caps in D45.
+
+This is the sixth and most important time this session that running for real
+changed the picture. Every one of these was invisible to the (passing) fake-backed
+tests.
+
+## D47 — 'Ask about this clip' tutor (B1)
+Grounded Q&A on a single clip. The transcript is stored on each assembled clip
+(cheap — it was already in the candidate) and read server-side from the persisted
+page, so the answer is grounded in the exact curated moment and the client cannot
+substitute a different transcript. Same anti-hallucination rule as assembly:
+answer only from the transcript, and say "the clip doesn't cover that" rather than
+reaching for outside knowledge — surfaced as a `grounded` flag so the not-covered
+case is measurable.

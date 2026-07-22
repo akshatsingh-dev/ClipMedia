@@ -64,6 +64,7 @@ async def lifespan(app: FastAPI):
     # once the queue connects, so limiting is correct across API processes.
     app.state.limiter = InMemoryRateLimiter()
     app.state.redis_limiter = None
+    app.state.llm = None  # built lazily by the tutor
     # Startup must not block on unreachable infrastructure: the API still serves
     # /healthz and 503s without a DB, which is what makes local frontend work
     # possible with nothing else running. arq in particular retries for ~5s.
@@ -341,6 +342,59 @@ async def get_reports(request: Request, limit: int = 100):
     """Review queue for reported clips (D6). Read-only; most-reported first."""
     repo = _repo(request)
     return {"reports": await repo.recent_reports(limit=min(max(limit, 1), 500))}
+
+
+class TutorRequest(BaseModel):
+    slug: str = Field(min_length=1, max_length=300)
+    video_id: str = Field(min_length=1, max_length=32)
+    t_start: float
+    question: str = Field(min_length=1, max_length=500)
+
+
+@app.post("/api/tutor")
+async def ask_tutor(req: TutorRequest, request: Request):
+    """'Ask about this clip' (B1). Answers grounded in the stored transcript.
+
+    The transcript is read from the persisted page rather than trusted from the
+    client, so the answer is grounded in the exact moment we curated.
+    """
+    from services.worker.pipeline.tutor import answer_question
+
+    repo = _repo(request)
+    page = await repo.get_page(normalize_query(req.slug))
+    if not page or not page.get("page"):
+        raise HTTPException(404, "page not found")
+
+    transcript = _find_clip_transcript(page["page"], req.video_id, req.t_start)
+    if transcript is None:
+        raise HTTPException(404, "clip not found on this page")
+
+    try:
+        llm = request.app.state.llm or _get_llm(request)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, "tutor unavailable: no LLM configured") from exc
+
+    return answer_question(transcript, req.question, llm)
+
+
+def _find_clip_transcript(page: dict, video_id: str, t_start: float) -> str | None:
+    """Locate a clip's stored transcript by video and (approximate) start time."""
+    for section in page.get("chapters") or page.get("groups") or []:
+        for clip in section.get("clips", []):
+            if clip.get("video_id") == video_id and abs(
+                float(clip.get("t_start", -1)) - t_start
+            ) < 2.0:
+                return clip.get("transcript")
+    return None
+
+
+def _get_llm(request: Request):
+    """Lazily build and cache an LLM client on the app for the tutor."""
+    from services.worker.llm.client import build_client
+
+    llm = build_client()
+    request.app.state.llm = llm
+    return llm
 
 
 @app.get("/api/build/{slug}/stream")

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
 from ..llm.client import LLMClient
-from ..sources.youtube import QuotaExceeded, YouTubeSource
+from ..sources.youtube import QuotaExceeded, TranscriptIpBlocked, YouTubeSource
 from .assemble import assemble_entertain, assemble_learn
 from .credibility import (
     DEFAULT_CREDIBILITY,
@@ -160,6 +160,16 @@ def build_page(
     for i, vid in enumerate(all_ids):
         try:
             t = deps.youtube.fetch_transcript(vid)
+        except TranscriptIpBlocked as exc:
+            # Affects every video, so stop rather than grinding through all of
+            # them. Keep whatever was fetched before the block; the build may
+            # still succeed on a partial corpus.
+            log.warning("transcript endpoint IP-blocked: %s", exc)
+            warnings.append(
+                "YouTube IP-blocked the transcript endpoint mid-build — set a "
+                "proxy (YTT_PROXY_* / WEBSHARE_PROXY_*) or retry later"
+            )
+            break
         except Exception as exc:  # noqa: BLE001 - one video must not lose a page
             log.info("transcript failed for %s: %s", vid, exc)
             t = None
@@ -173,6 +183,12 @@ def build_page(
         )
 
     if not transcripts:
+        if any("IP-blocked" in w for w in warnings):
+            raise BuildFailed(
+                "YouTube IP-blocked the transcript endpoint before any transcript "
+                "was fetched. Set a proxy (YTT_PROXY_* / WEBSHARE_PROXY_*) or retry "
+                "later — this is not a 'no captions' condition."
+            )
         raise BuildFailed("no transcripts available for any candidate video")
     coverage = len(transcripts) / len(all_ids)
     if coverage < MIN_TRANSCRIPT_COVERAGE:
