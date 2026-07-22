@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -225,6 +226,9 @@ class GeminiClient:
             except Exception as exc:  # network/rate-limit
                 last_exc = exc
                 log.warning("Gemini call failed (attempt %d): %s", attempt + 1, exc)
+                # Back off on rate limits; free-tier RPM caps are transient.
+                if "429" in str(exc) and attempt < MAX_RETRIES - 1:
+                    time.sleep(2.0 * (attempt + 1))
                 continue
             usage = getattr(raw, "usage_metadata", None)
             resp = LLMResponse(

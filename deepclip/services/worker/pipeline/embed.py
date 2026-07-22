@@ -13,6 +13,7 @@ HNSW index is built on it — changing dims is a migration, not a config flip.
 from __future__ import annotations
 
 import hashlib
+import time
 import logging
 import math
 import os
@@ -123,14 +124,78 @@ class VoyageEmbedder:
         return out
 
 
+class GeminiEmbedder:
+    """Hosted embeddings via Gemini. Requires GEMINI_API_KEY.
+
+    Chosen as the default when a Gemini key is present because it avoids the ~2GB
+    bge-m3 download, keeps a single provider, and gemini-embedding-001 outputs
+    1024 dims natively — matching the schema's VECTOR(1024) exactly.
+
+    `input_type` distinguishes documents from queries: retrieval quality improves
+    when the stored segments are embedded as RETRIEVAL_DOCUMENT and the search
+    query as RETRIEVAL_QUERY, which the asymmetry is designed for.
+    """
+
+    dim = EMBED_DIM
+
+    def __init__(self, model: str = "gemini-embedding-001", api_key: str | None = None):
+        key = api_key or os.environ.get("GEMINI_API_KEY")
+        if not key:
+            raise RuntimeError("GEMINI_API_KEY is not set")
+        from google import genai  # lazy
+
+        self._genai = genai
+        self._client = genai.Client(api_key=key)
+        self._model = model
+
+    def embed(self, texts: Sequence[str], task: str = "RETRIEVAL_DOCUMENT") -> list[list[float]]:
+        out: list[list[float]] = []
+        for start in range(0, len(texts), BATCH_SIZE):
+            batch = list(texts[start : start + BATCH_SIZE])
+            resp = self._embed_batch(batch, task)
+            out.extend(l2_normalize(list(e.values[:EMBED_DIM])) for e in resp.embeddings)
+        return out
+
+    def _embed_batch(self, batch: list[str], task: str):
+        """One batch, with backoff on 429. Free-tier RPM limits are transient, so
+        a short wait clears them; a persistent 429 (daily cap) still raises."""
+        delay = 2.0
+        for attempt in range(4):
+            try:
+                return self._client.models.embed_content(
+                    model=self._model,
+                    contents=batch,
+                    config=self._genai.types.EmbedContentConfig(
+                        output_dimensionality=EMBED_DIM, task_type=task
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                if "429" in str(exc) and attempt < 3:
+                    log.warning("embed 429, backing off %.0fs", delay)
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed([text], task="RETRIEVAL_QUERY")[0]
+
+
 def build_embedder(kind: str | None = None) -> Embedder:
     """Select an embedder. `kind` overrides the EMBEDDER env var.
 
-    Defaults to bge-m3 (local, free, no key). 'hashing' must be requested
-    explicitly — it is for plumbing tests only and would silently destroy
-    retrieval quality if it ever became a default.
+    Defaults to Gemini when a GEMINI_API_KEY is present (no download, 1024 dims
+    native), else bge-m3 (local, free). 'hashing' must be requested explicitly —
+    it is for plumbing tests only and would silently destroy retrieval quality if
+    it ever became a default.
     """
-    kind = (kind or os.environ.get("EMBEDDER") or "bge").lower()
+    if kind is None:
+        kind = os.environ.get("EMBEDDER")
+    if kind is None:
+        kind = "gemini" if os.environ.get("GEMINI_API_KEY") else "bge"
+    kind = kind.lower()
+    if kind == "gemini":
+        return GeminiEmbedder()
     if kind in {"bge", "bge-m3"}:
         return BGEEmbedder()
     if kind == "voyage":

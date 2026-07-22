@@ -16,6 +16,7 @@ Design rules:
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
@@ -45,6 +46,16 @@ TOP_K = 50
 # Below this share of candidates having transcripts, the page is built on a
 # thin slice of what was retrieved and the result should say so.
 MIN_TRANSCRIPT_COVERAGE = 0.5
+
+# Cost guards. A wide query can surface dozens of transcripts and hundreds of
+# moments; embedding and scoring every one is slow and, on a metered/free-tier
+# key, blows the request quota (the free Gemini embedding tier is the binding
+# limit). Keep only the highest-scoring moments per video, and cap the total
+# fed into embedding+scoring. These bound cost without changing ranking, since
+# detect_moments already returns moments best-first. Env-overridable so a paid
+# key can widen them.
+MAX_MOMENTS_PER_VIDEO = int(os.environ.get("MAX_MOMENTS_PER_VIDEO", "6"))
+MAX_TOTAL_CANDIDATES = int(os.environ.get("MAX_TOTAL_CANDIDATES", "120"))
 
 ProgressFn = Callable[[str, str, float, dict], None]
 
@@ -178,6 +189,11 @@ def build_page(
         moments = detect_moments(transcript, outline.mode)
         rows: list[Candidate] = []
         for m in moments:
+            # Keep only the best few per video (moments are best-first). This
+            # caps name-repair calls and the embed/score volume downstream, which
+            # is what keeps a build inside a free-tier request quota.
+            if len(rows) >= MAX_MOMENTS_PER_VIDEO:
+                break
             if looks_like_junk(m.text):
                 continue
             text = m.text
@@ -208,6 +224,18 @@ def build_page(
     all_candidates = [c for rows in candidates_by_video.values() for c in rows]
     if not all_candidates:
         raise BuildFailed("no usable moments found in any transcript")
+
+    # Hard cap on total candidates before the expensive embed/score steps.
+    # Interleave across videos rather than truncating the list (which would drop
+    # whole later videos), so the cap keeps source diversity.
+    if len(all_candidates) > MAX_TOTAL_CANDIDATES:
+        all_candidates = _interleave_cap(
+            list(candidates_by_video.values()), MAX_TOTAL_CANDIDATES
+        )
+        warnings.append(
+            f"capped to {len(all_candidates)} candidates for cost "
+            f"(raise MAX_TOTAL_CANDIDATES for a wider build)"
+        )
 
     progress("segment", "embedding", 1.0, {"moments": len(all_candidates)})
     vectors = embed_texts([c.text for c in all_candidates], deps.embedder)
@@ -397,6 +425,29 @@ def _outline_dict(outline: Outline) -> dict:
         ],
         "groupings": [{"label": g.label, "search_hints": g.search_hints} for g in outline.groupings],
     }
+
+
+def _interleave_cap(groups: list[list], limit: int) -> list:
+    """Round-robin across per-video candidate lists up to `limit`.
+
+    Truncating the flat list would drop whole trailing videos; interleaving keeps
+    the best moments from many sources, which preserves the channel diversity the
+    ranker later needs.
+    """
+    out: list = []
+    idx = 0
+    while len(out) < limit:
+        added = False
+        for g in groups:
+            if idx < len(g):
+                out.append(g[idx])
+                added = True
+                if len(out) >= limit:
+                    break
+        if not added:
+            break
+        idx += 1
+    return out
 
 
 def _dedupe(items) -> list[str]:

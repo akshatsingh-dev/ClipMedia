@@ -134,3 +134,37 @@ def test_segment_row_optional_fields():
     s = SegmentRow(video_id="v", t_start=0.0, t_end=30.0, text="t")
     assert s.embedding is None
     assert s.id is None
+
+
+# -- Gemini embedder selection ------------------------------------------
+
+
+def test_build_embedder_autodetects_gemini(monkeypatch):
+    """With a Gemini key and no explicit choice, use the hosted embedder."""
+    import services.worker.pipeline.embed as emb
+    monkeypatch.delenv("EMBEDDER", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    monkeypatch.setattr(emb, "GeminiEmbedder", lambda: "GEMINI")
+    assert emb.build_embedder() == "GEMINI"
+
+
+def test_build_embedder_falls_back_to_bge_without_key(monkeypatch):
+    import services.worker.pipeline.embed as emb
+    monkeypatch.delenv("EMBEDDER", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(emb, "BGEEmbedder", lambda: "BGE")
+    assert emb.build_embedder() == "BGE"
+
+
+def test_explicit_embedder_overrides_autodetect(monkeypatch):
+    import services.worker.pipeline.embed as emb
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    assert isinstance(emb.build_embedder("hashing"), emb.HashingEmbedder)
+
+
+def test_gemini_embedder_requires_key(monkeypatch):
+    import services.worker.pipeline.embed as emb
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    import pytest as _pt
+    with _pt.raises(RuntimeError, match="GEMINI_API_KEY"):
+        emb.GeminiEmbedder()
