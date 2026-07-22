@@ -430,3 +430,34 @@ backend rejects it — a dead end with no visible cause.
 both sides classify the same URLs identically, and that the set of
 caption-requiring platforms matches on both sides. Duplication across a language
 boundary is sometimes right; unguarded duplication never is.
+
+## D40 — Gemini support added; provider is now selectable
+The user wants to run Gemini rather than Claude. The LLM seam already isolated
+every model call behind one `complete()` method, so this touched only
+`llm/client.py` and no pipeline stage.
+
+- `GeminiClient` (google-genai) sits alongside `AnthropicClient`. Both satisfy
+  the same `LLMClient` protocol.
+- The pipeline still refers to two logical tiers, `MODEL_FAST`/`MODEL_SMART`.
+  Each client maps those to its own model names, so the pipeline never hard-codes
+  a provider's IDs. Gemini names are env-overridable (`GEMINI_MODEL_FAST/SMART`)
+  because model names churn faster than code.
+- `build_client()` selects by `LLM_PROVIDER`, else auto-detects from whichever
+  key is present, **preferring Gemini** when both are — matching the user's
+  choice.
+- Gemini's `resp.text` raises on a safety block rather than returning None, so
+  parsing wraps it and falls back to assembling candidate parts; a genuinely
+  empty response raises `LLMError` into the existing retry/degradation paths.
+
+Tested with an injected fake transport shaped like google-genai's response
+objects — tier mapping, parsing, the blocked-response path, token accounting,
+cost, retry, and provider selection. The only thing unexercised is the real
+network call, which needs a key.
+
+## D41 — Repo hygiene during first push
+The first `git push` was rejected: a 109 MB Next.js binary was in early history
+(committed before `.gitignore` existed, untracked later but still in history).
+Scrubbed `node_modules`, `.next`, and `.pytest_cache` from all history with
+git-filter-repo; `.git` went from 108 MB to 1.1 MB. Also untracked 46 committed
+`.pyc` files. Backed up to a branch first, verified all tests still pass after the
+rewrite, then pushed. All history preserved except the purged build artifacts.

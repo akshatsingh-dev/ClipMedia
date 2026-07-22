@@ -1,11 +1,16 @@
-"""Claude API client seam.
+"""LLM client seam (provider-agnostic).
 
 Everything LLM-shaped goes through `LLMClient` so the pipeline can be tested
-without a key and without network. `AnthropicClient` is the real one;
-`FakeLLMClient` is what the test suite uses.
+without a key and without network, and so the provider can be swapped without
+touching a single pipeline stage. `AnthropicClient` and `GeminiClient` are the
+real ones; `FakeLLMClient` is what the test suite uses. `build_client()` picks
+the provider from the environment.
 
-Model split follows the spec (C1): Haiku-class for bulk per-segment
-classification, Sonnet-class for outline, ranking and assembly.
+Model split follows the spec (C1): a fast tier for bulk per-segment
+classification, a smart tier for outline, ranking and assembly. The pipeline
+always refers to the two tiers by the `MODEL_FAST` / `MODEL_SMART` constants
+below; each real client maps those tier keys to its own model names, so the
+pipeline never hard-codes a provider's model IDs.
 """
 
 from __future__ import annotations
@@ -19,10 +24,18 @@ from typing import Any, Protocol
 
 log = logging.getLogger(__name__)
 
+# Canonical tier keys. Their *values* are Anthropic IDs for historical reasons,
+# but the pipeline treats them as opaque tier tokens — GeminiClient maps them to
+# Gemini models. Do not read a provider into these strings anywhere but a client.
 # Bulk classification. Cheap, runs over every segment.
 MODEL_FAST = "claude-haiku-4-5-20251001"
 # Outline, assembly, judging. Runs a handful of times per page.
 MODEL_SMART = "claude-sonnet-5"
+
+# Gemini model names for each tier. Env-overridable because model names churn
+# faster than code, and a rename should not need a redeploy.
+GEMINI_MODEL_FAST = os.environ.get("GEMINI_MODEL_FAST", "gemini-2.5-flash")
+GEMINI_MODEL_SMART = os.environ.get("GEMINI_MODEL_SMART", "gemini-2.5-pro")
 
 MAX_RETRIES = 3
 
@@ -103,6 +116,124 @@ class AnthropicClient:
         raise LLMError(f"LLM call failed after {MAX_RETRIES} attempts: {last_exc}")
 
 
+def _gemini_text(resp: Any) -> str:
+    """Pull text out of a Gemini response, tolerating blocked/empty candidates.
+
+    google-genai's `resp.text` raises rather than returning None when the
+    response was blocked by a safety filter or has no text part, so it is
+    wrapped and the candidate parts are assembled as a fallback. A genuinely
+    empty response raises LLMError, which the retry/degradation paths handle.
+    """
+    try:
+        text = resp.text
+        if text:
+            return text
+    except Exception:  # noqa: BLE001 - .text raises on blocked responses
+        pass
+
+    parts: list[str] = []
+    for cand in getattr(resp, "candidates", None) or []:
+        content = getattr(cand, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            piece = getattr(part, "text", None)
+            if piece:
+                parts.append(piece)
+    if parts:
+        return "".join(parts)
+    raise LLMError("Gemini returned no text (possibly blocked by a safety filter)")
+
+
+class GeminiClient:
+    """Real client for Google Gemini. Requires GEMINI_API_KEY.
+
+    The pipeline passes the canonical tier constants (`MODEL_FAST`/`MODEL_SMART`);
+    this maps them to Gemini models. A string that is already a Gemini model name
+    passes through unchanged, so callers can override per-call if they need to.
+
+    `client` is injectable so the parsing and cost paths are testable without the
+    SDK or a key.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        client: Any | None = None,
+        model_fast: str | None = None,
+        model_smart: str | None = None,
+    ):
+        self._model_fast = model_fast or GEMINI_MODEL_FAST
+        self._model_smart = model_smart or GEMINI_MODEL_SMART
+        self.usage = CostTracker()
+        if client is not None:
+            self._client = client
+            return
+        key = api_key or os.environ.get("GEMINI_API_KEY")
+        if not key:
+            raise RuntimeError("GEMINI_API_KEY is not set")
+        from google import genai  # imported lazily so the package is optional
+
+        self._client = genai.Client(api_key=key)
+
+    def _map_model(self, model: str) -> str:
+        if model == MODEL_FAST:
+            return self._model_fast
+        if model == MODEL_SMART:
+            return self._model_smart
+        return model  # already a Gemini id, or an explicit override
+
+    @staticmethod
+    def _config(system: str | None, temperature: float, max_tokens: int) -> Any:
+        # Built through the SDK's type when present; a plain dict is enough for a
+        # fake transport in tests, where the SDK is not installed.
+        try:
+            from google.genai import types
+
+            return types.GenerateContentConfig(
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+                system_instruction=system or None,
+            )
+        except ImportError:
+            return {
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+                "system_instruction": system,
+            }
+
+    def complete(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        model: str = MODEL_SMART,
+        max_tokens: int = 4096,
+        temperature: float = 0.0,
+    ) -> LLMResponse:
+        gemini_model = self._map_model(model)
+        config = self._config(system, temperature, max_tokens)
+
+        last_exc: Exception | None = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                raw = self._client.models.generate_content(
+                    model=gemini_model, contents=prompt, config=config
+                )
+            except Exception as exc:  # network/rate-limit
+                last_exc = exc
+                log.warning("Gemini call failed (attempt %d): %s", attempt + 1, exc)
+                continue
+            usage = getattr(raw, "usage_metadata", None)
+            resp = LLMResponse(
+                text=_gemini_text(raw),
+                input_tokens=int(getattr(usage, "prompt_token_count", 0) or 0),
+                output_tokens=int(getattr(usage, "candidates_token_count", 0) or 0),
+                model=gemini_model,
+            )
+            self.usage.record(resp)
+            return resp
+        raise LLMError(f"Gemini call failed after {MAX_RETRIES} attempts: {last_exc}")
+
+
 class FakeLLMClient:
     """Deterministic stand-in for tests.
 
@@ -142,9 +273,13 @@ class FakeLLMClient:
 
 # Prices per million tokens (USD). Update alongside model choices; the cost
 # model in C8 is a stated constraint, so builds should be able to report spend.
+# Gemini figures are approximate list prices and should be checked against
+# current pricing before relying on the reported cost.
 PRICING = {
     MODEL_FAST: {"input": 1.00, "output": 5.00},
     MODEL_SMART: {"input": 3.00, "output": 15.00},
+    GEMINI_MODEL_FAST: {"input": 0.30, "output": 2.50},
+    GEMINI_MODEL_SMART: {"input": 1.25, "output": 10.00},
 }
 
 
@@ -211,10 +346,29 @@ def extract_json(text: str) -> Any:
 
 
 def build_client() -> LLMClient:
-    """Real client if a key exists, else raise with a clear message."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set — LLM pipeline stages cannot run. "
-            "Set it, or inject a FakeLLMClient for offline work."
-        )
-    return AnthropicClient()
+    """Pick a real client from the environment.
+
+    Selection order:
+      1. `LLM_PROVIDER` if set ("gemini" | "anthropic") — explicit wins.
+      2. else whichever key is present, Gemini preferred when both are.
+      3. else raise with a message naming both options.
+    """
+    provider = os.environ.get("LLM_PROVIDER", "").strip().lower()
+    if not provider:
+        if os.environ.get("GEMINI_API_KEY"):
+            provider = "gemini"
+        elif os.environ.get("ANTHROPIC_API_KEY"):
+            provider = "anthropic"
+        else:
+            raise RuntimeError(
+                "No LLM key set — pipeline stages cannot run. Set GEMINI_API_KEY "
+                "(the project default) or ANTHROPIC_API_KEY, optionally with "
+                "LLM_PROVIDER to force one. Or inject a FakeLLMClient offline."
+            )
+    if provider == "gemini":
+        return GeminiClient()
+    if provider == "anthropic":
+        return AnthropicClient()
+    raise RuntimeError(
+        f"unknown LLM_PROVIDER {provider!r}; expected 'gemini' or 'anthropic'"
+    )
