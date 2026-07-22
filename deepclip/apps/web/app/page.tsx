@@ -2,8 +2,8 @@ import Link from "next/link";
 import SearchBox from "@/components/SearchBox";
 import { getIndex } from "@/lib/pages";
 
-export default function Home() {
-  const pages = getIndex();
+export default async function Home() {
+  const pages = await getIndex();
 
   return (
     <main className="mx-auto min-h-[100dvh] max-w-3xl px-6 py-16">

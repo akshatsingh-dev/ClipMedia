@@ -14,3 +14,6 @@ httpx==0.28.1
 
 # Embeddings (bge-m3 default). Heavy; see EMBEDDER env var for alternatives.
 sentence-transformers==3.3.1
+
+yt-dlp==2025.1.15
+faster-whisper==1.1.0

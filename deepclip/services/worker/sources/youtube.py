@@ -231,9 +231,18 @@ class YouTubeSource(SourceAdapter):
     def fetch_transcript(self, video_id: str) -> Transcript | None:
         """Stage 4 chain: manual captions -> auto captions -> Whisper -> skip.
 
-        Whisper is the caller's job to wire (needs a GPU); this returns None so
-        the pipeline can decide whether the video is worth the spend.
+        When `DEEPCLIP_WHISPER=1`, an IP block or missing captions falls through
+        to Whisper over yt-dlp audio (a different, unblocked host). Otherwise the
+        caption fetcher's behaviour is unchanged and an IP block still raises so
+        the build can report it.
         """
+        from ..pipeline.transcripts_whisper import (
+            fetch_with_whisper_fallback,
+            whisper_enabled,
+        )
+
+        if whisper_enabled():
+            return fetch_with_whisper_fallback(video_id, self._transcripts)
         return self._transcripts.fetch(video_id)
 
     # -- playback --------------------------------------------------------

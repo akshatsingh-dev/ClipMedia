@@ -577,3 +577,28 @@ substitute a different transcript. Same anti-hallucination rule as assembly:
 answer only from the transcript, and say "the clip doesn't cover that" rather than
 reaching for outside knowledge — surfaced as a `grounded` flag so the not-covered
 case is measurable.
+
+## D48 — Whisper via yt-dlp audio bypasses the caption IP block (the unblock)
+The transcript IP block (D46) looked fatal for live builds. It is not. Diagnosis:
+
+- youtube-transcript-api and the caption content URLs both hit YouTube's
+  `timedtext` endpoint, which is IP-rate-limited under load (429 / IpBlocked).
+- **Audio downloads come from googlevideo.com — a different host that is NOT
+  blocked.** Verified live: yt-dlp downloaded audio fast while captions 429'd.
+- faster-whisper decodes the raw m4a directly (bundled PyAV, no system ffmpeg)
+  and transcribed a real 20-min video in 20s on CPU with the `base` model, text
+  correct.
+
+So the Whisper fallback — already built, flagged off — is the escape hatch, and
+it works with no GPU and no ffmpeg. Wired so `DEEPCLIP_WHISPER=1` makes an IP
+block or missing captions fall through to Whisper automatically. The audio is
+still deleted in a `finally` (B4), and the duration cap bounds cost.
+
+Trade-off: Whisper is slow (~15-30s/video on CPU vs. instant captions), so a live
+build takes minutes rather than seconds. For production the order should be
+captions-first (fast, free) with Whisper only as the fallback — which is exactly
+the chain implemented. Captions return once the IP block lifts.
+
+This is the seventh time this session that running for real changed the outcome,
+and the most consequential: it turns "live builds are blocked" into "live builds
+work, slowly, today."

@@ -13,8 +13,10 @@ export function generateStaticParams() {
   return slugsForMode("learn").map((slug) => ({ slug }));
 }
 
-export default function LearnPage({ params }: { params: { slug: string } }) {
-  const page = getPage(params.slug);
+export const dynamicParams = true;
+
+export default async function LearnPage({ params }: { params: { slug: string } }) {
+  const page = await getPage(params.slug);
   if (!page || page.mode !== "learn" || !page.chapters) notFound();
 
   const totalClips = page.chapters.reduce((n, c) => n + c.clips.length, 0);

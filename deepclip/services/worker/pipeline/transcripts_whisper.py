@@ -28,7 +28,7 @@ from ..sources.base import Transcript, TranscriptCue
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "large-v3"
+DEFAULT_MODEL = os.environ.get("WHISPER_MODEL", "base")
 MAX_DURATION_S = 3600  # a 3-hour stream is not worth transcribing at $0.006/min
 
 
@@ -51,9 +51,12 @@ class WhisperTranscriber:
     gigabytes, so constructing one per video would dominate the run.
     """
 
-    def __init__(self, model_size: str = DEFAULT_MODEL, device: str = "auto"):
+    def __init__(self, model_size: str = DEFAULT_MODEL, device: str | None = None):
         self.model_size = model_size
-        self.device = device
+        # Default to CPU/int8: it runs everywhere (no CUDA needed) and is what a
+        # laptop actually has. float16 is GPU-only and crashes on CPU, so only a
+        # caller that knows it has a GPU should pass device="cuda".
+        self.device = device or os.environ.get("WHISPER_DEVICE", "cpu")
         self._model = None
 
     def _load(self):
@@ -66,7 +69,7 @@ class WhisperTranscriber:
                 "faster-whisper is not installed; add it to requirements to "
                 "enable the Whisper fallback"
             ) from exc
-        compute = "float16" if self.device in {"cuda", "auto"} else "int8"
+        compute = "float16" if self.device == "cuda" else "int8"
         self._model = WhisperModel(self.model_size, device=self.device, compute_type=compute)
         return self._model
 
@@ -98,7 +101,16 @@ class WhisperTranscriber:
 
     @staticmethod
     def _download_audio(video_id: str, workdir: str, max_duration_s: int) -> str | None:
-        """Audio-only fetch via yt-dlp. Never video, never retained."""
+        """Audio-only fetch via yt-dlp. Never video, never retained.
+
+        Deliberately does NOT run the FFmpegExtractAudio postprocessor: that needs
+        a system ffmpeg, and faster-whisper decodes the raw m4a/webm directly via
+        its bundled PyAV. Skipping it removes the ffmpeg dependency entirely.
+
+        Crucially, audio comes from googlevideo.com, a different host than the
+        caption endpoint YouTube IP-blocks under load — so this path keeps working
+        when youtube-transcript-api is blocked, which is the whole reason it exists.
+        """
         try:
             import yt_dlp
         except ImportError as exc:  # pragma: no cover
@@ -106,14 +118,12 @@ class WhisperTranscriber:
 
         out = os.path.join(workdir, "%(id)s.%(ext)s")
         opts = {
-            "format": "bestaudio/best",
+            # worstaudio keeps the file small; Whisper does not need fidelity.
+            "format": "worstaudio/bestaudio/best",
             "outtmpl": out,
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
-            "postprocessors": [
-                {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "64"}
-            ],
         }
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(
@@ -129,7 +139,7 @@ class WhisperTranscriber:
             ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
 
         for path in Path(workdir).iterdir():
-            if path.suffix in {".mp3", ".m4a", ".webm", ".opus"}:
+            if path.suffix.lower() in {".m4a", ".webm", ".opus", ".mp3", ".mp4", ".ogg"}:
                 return str(path)
         return None
 
@@ -157,9 +167,19 @@ def fetch_with_whisper_fallback(
     """The full stage-4 chain: manual → auto → whisper → None.
 
     Captions are always tried first, and they are free. Whisper only ever runs
-    when they are genuinely absent.
+    when they are genuinely absent — or when the caption endpoint is IP-blocked,
+    which is exactly the case this path is meant to rescue (audio comes from a
+    different host that is not blocked).
     """
-    transcript = caption_fetcher.fetch(video_id)
+    try:
+        transcript = caption_fetcher.fetch(video_id)
+    except Exception as exc:  # noqa: BLE001 - includes TranscriptIpBlocked
+        # Captions unavailable (blocked or errored). Fall through to Whisper if
+        # enabled; otherwise re-raise so the caller can report the block.
+        if not whisper_enabled():
+            raise
+        log.info("captions unavailable for %s (%s); using Whisper", video_id, type(exc).__name__)
+        transcript = None
     if transcript is not None:
         return transcript
     if not whisper_enabled():
