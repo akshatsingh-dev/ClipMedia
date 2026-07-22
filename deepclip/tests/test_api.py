@@ -354,6 +354,9 @@ class EventFakeRepo(FakeRepo):
     async def return_rate(self, within_days=7):
         return {"window_days": within_days, "users": 100, "returned": 28, "return_rate": 0.28}
 
+    async def recent_reports(self, limit=100):
+        return [{"slug": "g", "video_id": "A", "position": 0, "reports": 3, "last_reported": None, "reasons": ["wrong"]}]
+
 
 def ev(**kw):
     base = {"anon_id": "a", "session_id": "s", "kind": "page_view"}
@@ -463,3 +466,15 @@ def test_import_is_rate_limited(client):
         for i in range(6)
     ]
     assert codes[5] == 429
+
+
+def test_reports_endpoint(client):
+    client.app.state.repo = EventFakeRepo()
+    body = client.get("/api/reports").json()
+    assert body["reports"][0]["video_id"] == "A"
+    assert body["reports"][0]["reports"] == 3
+
+
+def test_reports_503_without_db(client):
+    client.app.state.repo = None
+    assert client.get("/api/reports").status_code == 503

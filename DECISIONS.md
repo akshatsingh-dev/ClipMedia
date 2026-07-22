@@ -504,3 +504,14 @@ Two deliberate choices:
   Redis sorted-set limiter is. The API uses Redis when the queue connection
   exists and falls back to in-memory (never fails open silently). Client identity
   prefers `x-forwarded-for` for deployments behind a proxy.
+
+## D44 — Report button (D6 day-one safety)
+Per-clip report control on both renderers. On a "real footage, curated" product
+the trust-killing failure is a wrong or misleading clip on contested history, so
+a low-friction flag has to exist from day one — a reason picker, not a form.
+
+A report writes a `report` event (the kind already existed) with the reason in
+`meta`. `recent_reports` groups by (slug, video_id, position) and ranks by report
+count, so a clip many people flag rises to the top of the review queue, exposed
+at `GET /api/reports`. Reusing the event stream means reports are reviewable with
+no separate table or pipeline.

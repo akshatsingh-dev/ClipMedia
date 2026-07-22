@@ -1,6 +1,7 @@
 "use client";
 
 import ClipPlayer from "./ClipPlayer";
+import ReportButton from "./ReportButton";
 import { formatTime } from "@/lib/format";
 import type { Chapter } from "@/lib/types";
 
@@ -75,6 +76,14 @@ export default function ChapterSection({
                 >
                   {formatTime(clip.t_start)}–{formatTime(clip.t_end)} · full video ↗
                 </a>
+                <div className="mt-1">
+                  <ReportButton
+                    slug={slug}
+                    mode="learn"
+                    videoId={clip.video_id}
+                    position={index * 100 + ci}
+                  />
+                </div>
               </div>
             </div>
           </article>

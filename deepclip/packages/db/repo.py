@@ -547,6 +547,39 @@ class Repo:
             for r in rows
         ]
 
+    async def recent_reports(self, limit: int = 100) -> list[dict]:
+        """Reported clips, newest first, with a count per clip (D6 review queue).
+
+        A clip reported by many people should rise to the top, so this groups by
+        (slug, video_id, position) and orders by report count then recency.
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT slug, video_id, position,
+                       count(*)         AS reports,
+                       max(created_at)  AS last_reported,
+                       array_agg(DISTINCT meta->>'reason') AS reasons
+                FROM events
+                WHERE kind = 'report'
+                GROUP BY slug, video_id, position
+                ORDER BY count(*) DESC, max(created_at) DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+        return [
+            {
+                "slug": r["slug"],
+                "video_id": r["video_id"],
+                "position": r["position"],
+                "reports": r["reports"],
+                "last_reported": r["last_reported"].isoformat() if r["last_reported"] else None,
+                "reasons": [x for x in (r["reasons"] or []) if x],
+            }
+            for r in rows
+        ]
+
     async def satisfaction(self, slug: str) -> dict:
         """The one-tap 'got what I came for' signal (D4)."""
         async with self.pool.acquire() as conn:

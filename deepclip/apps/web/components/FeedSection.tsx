@@ -5,6 +5,7 @@ import Link from "next/link";
 import ClipPlayer from "./ClipPlayer";
 import type { Clip, Group } from "@/lib/types";
 import { track } from "@/lib/analytics";
+import ReportButton from "./ReportButton";
 
 /**
  * Entertain Mode feed.
@@ -206,14 +207,22 @@ function FeedPane({
             <p className="mt-0.5 line-clamp-1 text-xs text-white/55">
               {clip.video_title}
             </p>
-            <a
-              href={clip.credit_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-2 inline-block text-xs text-white/60 underline decoration-white/30 hover:text-white"
-            >
-              watch full video →
-            </a>
+            <div className="mt-2 flex items-center gap-3">
+              <a
+                href={clip.credit_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-white/60 underline decoration-white/30 hover:text-white"
+              >
+                watch full video →
+              </a>
+              <ReportButton
+                slug={slug}
+                mode="entertain"
+                videoId={clip.video_id}
+                position={idx}
+              />
+            </div>
           </div>
         </div>
 

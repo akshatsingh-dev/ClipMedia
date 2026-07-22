@@ -336,6 +336,13 @@ async def get_global_metrics(request: Request, within_days: int = 7):
     return await repo.return_rate(within_days=min(max(within_days, 1), 90))
 
 
+@app.get("/api/reports")
+async def get_reports(request: Request, limit: int = 100):
+    """Review queue for reported clips (D6). Read-only; most-reported first."""
+    repo = _repo(request)
+    return {"reports": await repo.recent_reports(limit=min(max(limit, 1), 500))}
+
+
 @app.get("/api/build/{slug}/stream")
 async def stream_build(slug: str, request: Request):
     """SSE progress. Outline arrives first, sections fill as they rank (C5)."""

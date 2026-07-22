@@ -331,3 +331,24 @@ async def test_event_meta_roundtrips(repo):
     import json as _json
     meta = row["meta"] if isinstance(row["meta"], dict) else _json.loads(row["meta"])
     assert meta["reason"] == "wrong clip"
+
+
+async def test_recent_reports_ranks_by_count(repo):
+    """A clip reported by many people should rise to the top of the queue."""
+    from packages.db.repo import EventRow
+    evs = []
+    for i in range(3):  # video A: 3 reports
+        evs.append(EventRow(anon_id=f"u{i}", session_id="s", kind="report",
+                            slug="g", video_id="A", position=0, meta={"reason": "wrong"}))
+    evs.append(EventRow(anon_id="x", session_id="s", kind="report",
+                        slug="g", video_id="B", position=1, meta={"reason": "broken"}))
+    await repo.insert_events(evs)
+    reports = await repo.recent_reports()
+    assert reports[0]["video_id"] == "A"
+    assert reports[0]["reports"] == 3
+    assert "wrong" in reports[0]["reasons"]
+    assert reports[1]["video_id"] == "B"
+
+
+async def test_recent_reports_empty(repo):
+    assert await repo.recent_reports() == []
