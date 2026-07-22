@@ -515,3 +515,25 @@ A report writes a `report` event (the kind already existed) with the reason in
 count, so a clip many people flag rises to the top of the review queue, exposed
 at `GET /api/reports`. Reusing the event stream means reports are reviewable with
 no separate table or pipeline.
+
+## D45 — Real Gemini validation: model names were wrong, keys work
+First real LLM calls, against the user's Gemini key. Findings:
+
+- **The key authenticates and the stages work.** Stage 1 produced a strong
+  6-chapter Gandhi Salt March outline and correctly classified "funny ishowspeed
+  moments" as entertain with sensible groupings. Total cost $0.003 — much cheaper
+  than the Claude-based C8 estimate.
+- **My guessed model names were stale.** `gemini-2.5-flash`/`gemini-2.5-pro` were
+  retired for new keys, and `gemini-pro-latest` is quota-blocked on the free tier
+  (429). Switched defaults to `gemini-flash-latest` (smart) and
+  `gemini-flash-lite-latest` (fast) — the `-latest` aliases are churn-proof, which
+  is the whole reason the model names were made env-overridable.
+- **Gemini 3 "thinking" can consume the whole output budget** on a small
+  max_tokens, returning empty text. The pipeline's 2048–4096 budgets leave room,
+  and `_gemini_text` already raises-then-retries on empty, so this degrades
+  safely. flash-lite has negligible thinking overhead, which is why it is the
+  bulk-scoring tier.
+
+This is the fifth time this session that contact with reality corrected
+something fakes had passed. The pattern is now the strongest evidence in the
+project for running things for real early.

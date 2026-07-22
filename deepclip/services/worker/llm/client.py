@@ -34,8 +34,12 @@ MODEL_SMART = "claude-sonnet-5"
 
 # Gemini model names for each tier. Env-overridable because model names churn
 # faster than code, and a rename should not need a redeploy.
-GEMINI_MODEL_FAST = os.environ.get("GEMINI_MODEL_FAST", "gemini-2.5-flash")
-GEMINI_MODEL_SMART = os.environ.get("GEMINI_MODEL_SMART", "gemini-2.5-pro")
+# The "-latest" aliases are used deliberately: querying the live model list
+# during setup showed pinned versions (gemini-2.5-*) get retired for new keys,
+# and pro is quota-blocked on the free tier. flash-lite handles bulk scoring;
+# flash handles outline/assembly. Override via env if a key has pro access.
+GEMINI_MODEL_FAST = os.environ.get("GEMINI_MODEL_FAST", "gemini-flash-lite-latest")
+GEMINI_MODEL_SMART = os.environ.get("GEMINI_MODEL_SMART", "gemini-flash-latest")
 
 MAX_RETRIES = 3
 
@@ -278,8 +282,8 @@ class FakeLLMClient:
 PRICING = {
     MODEL_FAST: {"input": 1.00, "output": 5.00},
     MODEL_SMART: {"input": 3.00, "output": 15.00},
-    GEMINI_MODEL_FAST: {"input": 0.30, "output": 2.50},
-    GEMINI_MODEL_SMART: {"input": 1.25, "output": 10.00},
+    GEMINI_MODEL_FAST: {"input": 0.10, "output": 0.40},
+    GEMINI_MODEL_SMART: {"input": 0.30, "output": 2.50},
 }
 
 

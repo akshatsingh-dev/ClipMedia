@@ -161,8 +161,8 @@ def test_cost_accrues_on_gemini_pricing():
     fake = FakeGenaiClient([text_response("ok", inp=1_000_000, out=0)])
     c = GeminiClient(client=fake)
     c.complete("hi", model=MODEL_SMART)
-    # gemini pro input list price is $1.25 / 1M in the pricing table
-    assert c.usage.cost_usd == pytest.approx(1.25)
+    # smart-tier (flash) input list price is $0.30 / 1M in the pricing table
+    assert c.usage.cost_usd == pytest.approx(0.30)
 
 
 def test_system_instruction_passed_through():
