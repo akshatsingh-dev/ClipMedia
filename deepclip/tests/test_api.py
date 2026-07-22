@@ -423,3 +423,43 @@ def test_global_return_rate(client):
 def test_metrics_503_without_db(client):
     client.app.state.repo = None
     assert client.get("/api/metrics/x").status_code == 503
+
+
+# -- rate limiting ------------------------------------------------------
+
+
+def test_build_is_rate_limited(client):
+    """The 6th uncached build in the window is rejected, not enqueued."""
+    from services.api.ratelimit import InMemoryRateLimiter
+    repo, queue = FakeRepo(), FakeQueue()
+    client.app.state.repo, client.app.state.queue = repo, queue
+    client.app.state.limiter = InMemoryRateLimiter()
+    client.app.state.redis_limiter = None
+
+    codes = [client.post("/api/build", json={"query": f"q{i}"}).status_code for i in range(6)]
+    assert codes[:5] == [200, 200, 200, 200, 200]
+    assert codes[5] == 429
+    assert len(queue.enqueued) == 5, "the rejected build must not enqueue"
+
+
+def test_cached_build_not_rate_limited(client):
+    """A cache hit is free, so it must not consume the build budget."""
+    from services.api.ratelimit import InMemoryRateLimiter
+    repo = FakeRepo({"gandhi": READY_PAGE})
+    client.app.state.repo, client.app.state.queue = repo, FakeQueue()
+    client.app.state.limiter = InMemoryRateLimiter()
+    client.app.state.redis_limiter = None
+    codes = [client.post("/api/build", json={"query": "Gandhi"}).status_code for _ in range(10)]
+    assert all(c == 200 for c in codes)
+
+
+def test_import_is_rate_limited(client):
+    from services.api.ratelimit import InMemoryRateLimiter
+    client.app.state.repo, client.app.state.queue = FakeRepo(), FakeQueue()
+    client.app.state.limiter = InMemoryRateLimiter()
+    client.app.state.redis_limiter = None
+    codes = [
+        client.post("/api/import", json={"url": f"https://youtu.be/aircAruvnKk{i}"}).status_code
+        for i in range(6)
+    ]
+    assert codes[5] == 429

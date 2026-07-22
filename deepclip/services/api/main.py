@@ -31,6 +31,14 @@ from packages.db.repo import EventRow, Repo
 from services.worker.pipeline.outline import normalize_query
 
 from .progress import ProgressBus, ProgressEvent
+from .ratelimit import (
+    BUILD_LIMIT,
+    IMPORT_LIMIT,
+    InMemoryRateLimiter,
+    Limit,
+    RedisRateLimiter,
+    client_key,
+)
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +60,10 @@ async def lifespan(app: FastAPI):
     app.state.repo = None
     app.state.queue = None
     app.state.bus = ProgressBus()
+    # In-memory limiter always exists as a floor; upgraded to Redis-backed below
+    # once the queue connects, so limiting is correct across API processes.
+    app.state.limiter = InMemoryRateLimiter()
+    app.state.redis_limiter = None
     # Startup must not block on unreachable infrastructure: the API still serves
     # /healthz and 503s without a DB, which is what makes local frontend work
     # possible with nothing else running. arq in particular retries for ~5s.
@@ -75,6 +87,17 @@ async def lifespan(app: FastAPI):
         log.info("connected to redis")
     except Exception as exc:  # noqa: BLE001
         log.warning("no queue connection: %s", exc)
+
+    # Reuse the arq redis connection for cross-process rate limiting when present.
+    try:
+        if app.state.queue is not None:
+            from redis.asyncio import Redis
+
+            app.state.redis_limiter = RedisRateLimiter(
+                Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"))
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("no redis rate limiter: %s", exc)
 
     yield
 
@@ -131,6 +154,29 @@ def _repo(request: Request) -> Repo:
     if repo is None:
         raise HTTPException(503, "database unavailable")
     return repo
+
+
+async def _enforce_limit(request: Request, limit: Limit, bucket: str) -> None:
+    """429 if the caller exceeded `limit`. Prefers the cross-process limiter."""
+    key = f"{bucket}:{client_key(request)}"
+    redis_limiter = request.app.state.redis_limiter
+    if redis_limiter is not None:
+        try:
+            allowed = await redis_limiter.check(key, limit)
+        except Exception as exc:  # noqa: BLE001 - never fail open silently
+            log.warning("redis rate limit check failed, falling back: %s", exc)
+            allowed = request.app.state.limiter.check(key, limit)
+    else:
+        allowed = request.app.state.limiter.check(key, limit)
+
+    if not allowed:
+        raise HTTPException(
+            429,
+            detail=(
+                f"Rate limit: at most {limit.max_requests} {bucket} requests per "
+                f"{int(limit.window_s)}s. Each build is expensive — try again shortly."
+            ),
+        )
 
 
 @app.get("/healthz")
@@ -190,6 +236,8 @@ async def build(req: BuildRequest, request: Request):
     repo = _repo(request)
     slug = normalize_query(req.query)
 
+    # Limit only when it would actually enqueue paid work — a cache hit is free,
+    # so check after the cache lookup below rather than rejecting cached reads.
     existing = await repo.get_page(slug)
     if existing and existing.get("status") == "ready":
         return {"cached": True, "slug": slug, "mode": existing["mode"], "page": existing["page"]}
@@ -202,6 +250,9 @@ async def build(req: BuildRequest, request: Request):
     if queue is None:
         raise HTTPException(503, "build queue unavailable")
 
+    # Paid path reached: enforce the limit now, not on cached hits above.
+    await _enforce_limit(request, BUILD_LIMIT, "build")
+
     await repo.claim_page_build(slug, req.mode or "learn")
     job = await queue.enqueue_job("build_page", req.query, req.mode)
     return {"cached": False, "slug": slug, "status": "building", "job_id": job.job_id}
@@ -212,6 +263,7 @@ async def import_reel(req: ImportRequest, request: Request):
     queue = request.app.state.queue
     if queue is None:
         raise HTTPException(503, "build queue unavailable")
+    await _enforce_limit(request, IMPORT_LIMIT, "import")
     job = await queue.enqueue_job(
         "import_seed", req.url, req.caption_text, req.confirmed_query
     )

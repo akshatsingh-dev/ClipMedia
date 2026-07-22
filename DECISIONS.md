@@ -489,3 +489,18 @@ end to end.
 Every path degrades silently: analytics losing data is acceptable, analytics
 breaking a page is not. 10 new DB aggregate tests, 9 API tests, verified against
 real Postgres.
+
+## D43 — Rate limiting on the paid endpoints
+`/api/build` and `/api/import` both enqueue ~$1 of work, and were unthrottled —
+one script could run up a bill or drain the YouTube quota for everyone. Both are
+now capped (5 per 60s per client).
+
+Two deliberate choices:
+- **Limit only when work is actually paid.** A cache hit on `/api/build` is free,
+  so the limit is checked *after* the cache lookup — a user reloading a built page
+  is never rate-limited, only genuine new builds are.
+- **Redis-backed when available, in-memory floor otherwise.** The in-memory
+  limiter is per-process, so it is not correct across multiple API replicas; the
+  Redis sorted-set limiter is. The API uses Redis when the queue connection
+  exists and falls back to in-memory (never fails open silently). Client identity
+  prefers `x-forwarded-for` for deployments behind a proxy.
