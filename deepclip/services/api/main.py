@@ -27,7 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from packages.db.repo import Repo
+from packages.db.repo import EventRow, Repo
 from services.worker.pipeline.outline import normalize_query
 
 from .progress import ProgressBus, ProgressEvent
@@ -106,6 +106,24 @@ class ImportRequest(BaseModel):
     # a confusing error rather than working.
     caption_text: str | None = Field(default=None, max_length=5000)
     confirmed_query: str | None = Field(default=None, max_length=300)
+
+
+class EventIn(BaseModel):
+    anon_id: str = Field(min_length=1, max_length=64)
+    session_id: str = Field(min_length=1, max_length=64)
+    kind: str = Field(min_length=1, max_length=32)
+    slug: str | None = Field(default=None, max_length=300)
+    mode: str | None = Field(default=None, max_length=16)
+    video_id: str | None = Field(default=None, max_length=32)
+    position: int | None = None
+    value: float | None = None
+    meta: dict | None = None
+
+
+class EventBatch(BaseModel):
+    # A batch, because the client buffers and flushes with sendBeacon rather than
+    # firing one request per interaction.
+    events: list[EventIn] = Field(min_length=1, max_length=100)
 
 
 def _repo(request: Request) -> Repo:
@@ -211,6 +229,59 @@ async def get_path(path_id: str, request: Request):
         "seed_analysis": path["seed_analysis"],
         "page": path["page"],
     }
+
+
+@app.post("/api/events", status_code=202)
+async def ingest_events(batch: EventBatch, request: Request):
+    """Analytics ingestion. Fire-and-forget: always 202, never blocks the client.
+
+    Invalid events are dropped rather than 4xx'd — a beacon cannot read a
+    response and retrying analytics is pointless, so a bad event should vanish,
+    not error. Returns how many were accepted for observability only.
+    """
+    repo = request.app.state.repo
+    if repo is None:
+        # No DB: accept and discard. Losing analytics must never surface to a user.
+        return {"accepted": 0}
+
+    rows = [
+        EventRow(
+            anon_id=e.anon_id, session_id=e.session_id, kind=e.kind, slug=e.slug,
+            mode=e.mode, video_id=e.video_id, position=e.position, value=e.value,
+            meta=e.meta,
+        )
+        for e in batch.events
+    ]
+    valid = [r for r in rows if r.valid()]
+    try:
+        written = await repo.insert_events(valid)
+    except Exception as exc:  # noqa: BLE001 - analytics never breaks the app
+        log.warning("event insert failed: %s", exc)
+        return {"accepted": 0}
+    return {"accepted": written}
+
+
+@app.get("/api/metrics/{slug}")
+async def get_metrics(slug: str, request: Request):
+    """Read-only dashboard data for one page — the go/no-go numbers (D4/D8)."""
+    repo = _repo(request)
+    normalized = normalize_query(slug)
+    completion = await repo.page_completion_rate(normalized)
+    watch_depth = await repo.clip_watch_depth(normalized)
+    sat = await repo.satisfaction(normalized)
+    return {
+        "slug": normalized,
+        "completion": completion,
+        "clip_watch_depth": watch_depth,
+        "satisfaction": sat,
+    }
+
+
+@app.get("/api/metrics")
+async def get_global_metrics(request: Request, within_days: int = 7):
+    """Global return rate — the metric that separates a company from a feature."""
+    repo = _repo(request)
+    return await repo.return_rate(within_days=min(max(within_days, 1), 90))
 
 
 @app.get("/api/build/{slug}/stream")

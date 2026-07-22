@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Clip } from "@/lib/types";
+import { track } from "@/lib/analytics";
 
 /**
  * Lazy-mounted YouTube embed (C5, mandatory).
@@ -20,6 +21,10 @@ type Props = {
   onEnded?: () => void;
   className?: string;
   rounded?: boolean;
+  /** Page slug and clip index, for analytics. Optional so the player still
+   *  works in isolation (e.g. tests) without an analytics context. */
+  analyticsSlug?: string;
+  analyticsPosition?: number;
 };
 
 export default function ClipPlayer({
@@ -28,6 +33,8 @@ export default function ClipPlayer({
   onEnded,
   className = "",
   rounded = true,
+  analyticsSlug,
+  analyticsPosition,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [inView, setInView] = useState(false);
@@ -57,6 +64,36 @@ export default function ClipPlayer({
     const timer = setTimeout(onEnded, durationMs);
     return () => clearTimeout(timer);
   }, [activated, clip.t_start, clip.t_end, onEnded]);
+
+  // clip_complete fires when a clip plays its full curated span. value = 1.0
+  // here because the timer only fires on completion; partial-watch tracking
+  // would need the IFrame API's time updates, a later refinement.
+  useEffect(() => {
+    if (!activated || !onEnded) return;
+    const durationMs = Math.max((clip.t_end - clip.t_start) * 1000, 1000);
+    const t = setTimeout(() => {
+      track("clip_complete", {
+        slug: analyticsSlug,
+        video_id: clip.video_id,
+        position: analyticsPosition,
+        value: 1.0,
+      });
+    }, durationMs);
+    return () => clearTimeout(t);
+  }, [activated, clip, analyticsSlug, analyticsPosition, onEnded]);
+
+  // clip_view once, when it first becomes visible.
+  const viewed = useRef(false);
+  useEffect(() => {
+    if (inView && !viewed.current) {
+      viewed.current = true;
+      track("clip_view", {
+        slug: analyticsSlug,
+        video_id: clip.video_id,
+        position: analyticsPosition,
+      });
+    }
+  }, [inView, clip.video_id, analyticsSlug, analyticsPosition]);
 
   // Unmount the iframe when it leaves view in autoplay feeds — this is what
   // actually stops audio from three clips overlapping.

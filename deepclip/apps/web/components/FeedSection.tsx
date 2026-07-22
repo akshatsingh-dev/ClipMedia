@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import ClipPlayer from "./ClipPlayer";
 import type { Clip, Group } from "@/lib/types";
+import { track } from "@/lib/analytics";
 
 /**
  * Entertain Mode feed.
@@ -22,9 +23,11 @@ type FeedClip = Clip & { groupLabel: string };
 export default function FeedSection({
   groups,
   title,
+  slug = "",
 }: {
   groups: Group[];
   title: string;
+  slug?: string;
 }) {
   // Interleave across groupings so the feed varies subject, matching the
   // server-side ranking behaviour in rank_entertain.interleave().
@@ -39,6 +42,25 @@ export default function FeedSection({
   const containerRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
   const [autoAdvance, setAutoAdvance] = useState(true);
+
+  // page_view once on mount.
+  const viewFired = useRef(false);
+  useEffect(() => {
+    if (viewFired.current) return;
+    viewFired.current = true;
+    track("page_view", { slug, mode: "entertain" });
+  }, [slug]);
+
+  // end_card when the reader reaches the end pane. In a feed this — not
+  // "scrolled a lot" — is the completion signal, because the whole promise is
+  // that the feed ends.
+  const endFired = useRef(false);
+  useEffect(() => {
+    if (active >= clips.length && !endFired.current) {
+      endFired.current = true;
+      track("end_card", { slug, mode: "entertain", position: clips.length });
+    }
+  }, [active, clips.length, slug]);
 
   const goTo = useCallback((idx: number) => {
     const el = containerRef.current?.children[idx] as HTMLElement | undefined;
@@ -125,6 +147,7 @@ export default function FeedSection({
             idx={i}
             total={clips.length}
             onEnded={() => handleEnded(i)}
+            slug={slug}
           />
         ))}
         <EndCard idx={clips.length} count={clips.length} title={title} />
@@ -138,11 +161,13 @@ function FeedPane({
   idx,
   total,
   onEnded,
+  slug,
 }: {
   clip: FeedClip;
   idx: number;
   total: number;
   onEnded: () => void;
+  slug: string;
 }) {
   return (
     <section
@@ -151,7 +176,15 @@ function FeedPane({
     >
       {/* Portrait stage, the short-form frame. */}
       <div className="relative h-full w-full max-w-[min(100vw,calc(100dvh*9/16))]">
-        <ClipPlayer clip={clip} autoplay onEnded={onEnded} rounded={false} className="h-full" />
+        <ClipPlayer
+          clip={clip}
+          autoplay
+          onEnded={onEnded}
+          rounded={false}
+          className="h-full"
+          analyticsSlug={slug}
+          analyticsPosition={idx}
+        />
 
         {/* bottom gradient + metadata */}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/70 to-transparent p-4 pb-8">

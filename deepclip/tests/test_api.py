@@ -324,3 +324,102 @@ def test_sse_unsubscribes_on_disconnect(client):
         _read_event(resp.iter_lines())
     # The generator's finally block must release the subscriber.
     assert bus.subscriber_count("x") == 0
+
+
+# -- analytics endpoints ------------------------------------------------
+
+
+class EventFakeRepo(FakeRepo):
+    def __init__(self, *a, fail_insert=False, **kw):
+        super().__init__(*a, **kw)
+        self.inserted = []
+        self._fail_insert = fail_insert
+        self._metrics = {}
+
+    async def insert_events(self, events):
+        if self._fail_insert:
+            raise RuntimeError("db down")
+        self.inserted.extend(events)
+        return len(events)
+
+    async def page_completion_rate(self, slug):
+        return {"slug": slug, "started": 4, "finished": 3, "completion_rate": 0.75}
+
+    async def clip_watch_depth(self, slug):
+        return [{"position": 0, "mean_watched": 0.9, "views": 10}]
+
+    async def satisfaction(self, slug):
+        return {"slug": slug, "responses": 5, "mean_rating": 0.8}
+
+    async def return_rate(self, within_days=7):
+        return {"window_days": within_days, "users": 100, "returned": 28, "return_rate": 0.28}
+
+
+def ev(**kw):
+    base = {"anon_id": "a", "session_id": "s", "kind": "page_view"}
+    base.update(kw)
+    return base
+
+
+def test_events_accepted(client):
+    repo = EventFakeRepo()
+    client.app.state.repo = repo
+    r = client.post("/api/events", json={"events": [ev(), ev(kind="clip_view", position=0)]})
+    assert r.status_code == 202
+    assert r.json()["accepted"] == 2
+    assert len(repo.inserted) == 2
+
+
+def test_events_drops_invalid_kind_but_keeps_valid(client):
+    """A typo'd kind is dropped, not 4xx'd — a beacon cannot read a response."""
+    repo = EventFakeRepo()
+    client.app.state.repo = repo
+    r = client.post("/api/events", json={"events": [ev(), ev(kind="not_a_real_kind")]})
+    assert r.status_code == 202
+    assert r.json()["accepted"] == 1
+
+
+def test_events_survive_db_failure(client):
+    """Analytics must never surface an error to the user."""
+    client.app.state.repo = EventFakeRepo(fail_insert=True)
+    r = client.post("/api/events", json={"events": [ev()]})
+    assert r.status_code == 202
+    assert r.json()["accepted"] == 0
+
+
+def test_events_accepted_without_database(client):
+    """No DB: accept and discard rather than erroring."""
+    client.app.state.repo = None
+    r = client.post("/api/events", json={"events": [ev()]})
+    assert r.status_code == 202
+    assert r.json()["accepted"] == 0
+
+
+def test_events_rejects_empty_batch(client):
+    client.app.state.repo = EventFakeRepo()
+    assert client.post("/api/events", json={"events": []}).status_code == 422
+
+
+def test_events_rejects_oversized_batch(client):
+    client.app.state.repo = EventFakeRepo()
+    big = {"events": [ev() for _ in range(101)]}
+    assert client.post("/api/events", json=big).status_code == 422
+
+
+def test_metrics_for_page(client):
+    client.app.state.repo = EventFakeRepo()
+    body = client.get("/api/metrics/Gandhi").json()
+    assert body["completion"]["completion_rate"] == 0.75
+    assert body["satisfaction"]["mean_rating"] == 0.8
+    assert body["clip_watch_depth"][0]["mean_watched"] == 0.9
+
+
+def test_global_return_rate(client):
+    client.app.state.repo = EventFakeRepo()
+    body = client.get("/api/metrics").json()
+    assert body["return_rate"] == 0.28
+
+
+def test_metrics_503_without_db(client):
+    client.app.state.repo = None
+    assert client.get("/api/metrics/x").status_code == 503

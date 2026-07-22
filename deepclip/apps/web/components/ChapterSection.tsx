@@ -11,9 +11,11 @@ import type { Chapter } from "@/lib/types";
 export default function ChapterSection({
   chapter,
   index,
+  slug = "",
 }: {
   chapter: Chapter;
   index: number;
+  slug?: string;
 }) {
   const channels = new Set(chapter.clips.map((c) => c.channel));
 
@@ -37,10 +39,15 @@ export default function ChapterSection({
       </div>
 
       <div className="space-y-8">
-        {chapter.clips.map((clip) => (
+        {chapter.clips.map((clip, ci) => (
           <article key={`${clip.video_id}-${clip.t_start}`}>
             <div className="aspect-video w-full">
-              <ClipPlayer clip={clip} className="h-full" />
+              <ClipPlayer
+                clip={clip}
+                className="h-full"
+                analyticsSlug={slug}
+                analyticsPosition={index * 100 + ci}
+              />
             </div>
             <div className="mt-3 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
               <div className="min-w-0 flex-1">

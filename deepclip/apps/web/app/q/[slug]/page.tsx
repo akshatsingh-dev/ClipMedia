@@ -2,6 +2,11 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import ChapterSection from "@/components/ChapterSection";
 import UnverifiedBanner from "@/components/UnverifiedBanner";
+import {
+  PageCompleteSentinel,
+  PageViewTracker,
+  SatisfactionTap,
+} from "@/components/PageAnalytics";
 import { getPage, slugsForMode } from "@/lib/pages";
 
 export function generateStaticParams() {
@@ -16,6 +21,7 @@ export default function LearnPage({ params }: { params: { slug: string } }) {
 
   return (
     <main className="mx-auto max-w-3xl px-6 pb-24 pt-10">
+      <PageViewTracker slug={page.slug} mode="learn" />
       <Link href="/" className="text-sm text-white/45 hover:text-white">
         ← all pages
       </Link>
@@ -49,8 +55,10 @@ export default function LearnPage({ params }: { params: { slug: string } }) {
       </nav>
 
       {page.chapters.map((chapter, i) => (
-        <ChapterSection key={chapter.title} chapter={chapter} index={i} />
+        <ChapterSection key={chapter.title} chapter={chapter} index={i} slug={page.slug} />
       ))}
+
+      <SatisfactionTap slug={page.slug} mode="learn" />
 
       <section className="border-t border-edge pt-12 text-center">
         <p className="text-sm uppercase tracking-[0.2em] text-sky-300">end of page</p>
@@ -59,6 +67,8 @@ export default function LearnPage({ params }: { params: { slug: string } }) {
           {page.chapters.length} chapters, {totalClips} clips, no filler. The page
           ends — completion is the goal, not session time.
         </p>
+        {/* Fires page_complete only when the reader actually reaches here. */}
+        <PageCompleteSentinel slug={page.slug} mode="learn" />
         <Link
           href="/"
           className="mt-6 inline-block rounded-full bg-white/10 px-5 py-2.5 text-sm hover:bg-white/20"

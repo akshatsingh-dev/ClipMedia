@@ -60,3 +60,24 @@ CREATE TABLE IF NOT EXISTS hint_cache (
   video_ids  TEXT[],
   fetched_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Analytics (master doc D4/D8): the go/no-go metric is "do users finish pages
+-- and come back?". None of that is answerable without recording it. Append-only
+-- event log. anon_id is a client-generated UUID stored in localStorage, never a
+-- real identity -- no login is required to measure completion and return.
+CREATE TABLE IF NOT EXISTS events (
+  id          BIGSERIAL PRIMARY KEY,
+  anon_id     TEXT NOT NULL,
+  session_id  TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  slug        TEXT,
+  mode        TEXT,
+  video_id    TEXT,
+  position    INT,
+  value       REAL,
+  meta        JSONB,
+  created_at  TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS events_slug_idx ON events (slug, created_at);
+CREATE INDEX IF NOT EXISTS events_kind_idx ON events (kind, created_at);
+CREATE INDEX IF NOT EXISTS events_anon_idx ON events (anon_id, created_at);

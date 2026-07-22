@@ -461,3 +461,31 @@ Scrubbed `node_modules`, `.next`, and `.pytest_cache` from all history with
 git-filter-repo; `.git` went from 108 MB to 1.1 MB. Also untracked 46 committed
 `.pyc` files. Backed up to a branch first, verified all tests still pass after the
 rewrite, then pushed. All history preserved except the purged build artifacts.
+
+## D42 — Analytics: the go/no-go metric is now measurable
+The master doc's entire kill/scale decision (D4, D8) is "do users finish pages
+and come back?" and nothing measured it. Built an append-only event log
+end to end.
+
+- `events` table + `EventRow` with a **closed** `EVENT_KINDS` set, so a client
+  typo becomes a rejected event, not a silent hole in the metric.
+- Repo aggregates compute the real numbers: `page_completion_rate` (over
+  distinct sessions, so a reload cannot inflate it), `return_rate` (>=2 distinct
+  active days — the company-vs-feature line), `clip_watch_depth` (where attention
+  actually drops off, which "completion" alone hides), and `satisfaction`.
+- `POST /api/events` is fire-and-forget: **always 202, never blocks or errors the
+  client.** Invalid events are dropped, not 4xx'd, because a `sendBeacon` cannot
+  read a response and retrying analytics is pointless. A DB failure returns
+  `accepted: 0` rather than surfacing.
+- Frontend `lib/analytics.ts` is anonymous (localStorage UUID, per-tab session),
+  batched, and flushed with `sendBeacon` on `pagehide`/`visibilitychange` — the
+  most important event (reaching the end) is the one most likely to be lost on
+  unload, so it uses the one transport that survives it.
+- Wired: `page_view`, `clip_view`, `clip_complete`, `page_complete` (Learn, via
+  an intersection sentinel so it fires only on genuine arrival), `end_card`
+  (Entertain — reaching the end is the anti-infinite-scroll signal), and a
+  one-tap `satisfaction` control.
+
+Every path degrades silently: analytics losing data is acceptable, analytics
+breaking a page is not. 10 new DB aggregate tests, 9 API tests, verified against
+real Postgres.

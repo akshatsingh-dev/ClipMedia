@@ -77,6 +77,38 @@ class SegmentRow:
     id: int | None = None
 
 
+# The closed set of event kinds. Kept here (not free-form) so a typo in the
+# client becomes a rejected event rather than a silent hole in the metric.
+EVENT_KINDS = frozenset(
+    {
+        "page_view",       # a page/feed opened
+        "clip_view",       # a clip scrolled into view / mounted
+        "clip_complete",   # a clip reached its t_end; value = fraction watched
+        "page_complete",   # a Learn page reached its end section
+        "end_card",        # a feed reached its end-card (the anti-infinite signal)
+        "satisfaction",    # one-tap "got what I came for"; value = rating
+        "import",          # a reel-import was started
+        "report",          # a clip was reported
+    }
+)
+
+
+@dataclass
+class EventRow:
+    anon_id: str
+    session_id: str
+    kind: str
+    slug: str | None = None
+    mode: str | None = None
+    video_id: str | None = None
+    position: int | None = None
+    value: float | None = None
+    meta: dict | None = None
+
+    def valid(self) -> bool:
+        return bool(self.anon_id and self.session_id and self.kind in EVENT_KINDS)
+
+
 class Repo:
     """Async repository over an asyncpg pool."""
 
@@ -389,3 +421,145 @@ class Repo:
             if isinstance(d.get(key), str):
                 d[key] = json.loads(d[key])
         return d
+
+    # -- analytics (D4/D8: the go/no-go metric) --------------------------
+
+    async def insert_events(self, events: Sequence["EventRow"]) -> int:
+        """Append events. Batched, since the client sends them in bursts.
+
+        Returns the count written. Analytics is fire-and-forget from the caller's
+        side — a failure here must never break page delivery, so the API wraps
+        this, not the reverse.
+        """
+        if not events:
+            return 0
+        async with self.pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO events
+                  (anon_id, session_id, kind, slug, mode, video_id, position,
+                   value, meta)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+                """,
+                [
+                    (
+                        e.anon_id, e.session_id, e.kind, e.slug, e.mode,
+                        e.video_id, e.position, e.value,
+                        json.dumps(e.meta) if e.meta is not None else None,
+                    )
+                    for e in events
+                ],
+            )
+        return len(events)
+
+    async def page_completion_rate(self, slug: str) -> dict:
+        """Completion = distinct sessions that reached the end / that started.
+
+        The doc's north star (D4): a page that people finish. A 'page_view' opens
+        a session on a page; a 'page_complete' or 'end_card' closes it having
+        reached the bottom. Rate is over distinct sessions, not events, so a
+        session cannot inflate its own completion by reloading.
+        """
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                WITH started AS (
+                  SELECT DISTINCT session_id FROM events
+                  WHERE slug = $1 AND kind = 'page_view'
+                ),
+                finished AS (
+                  SELECT DISTINCT session_id FROM events
+                  WHERE slug = $1 AND kind IN ('page_complete', 'end_card')
+                )
+                SELECT
+                  (SELECT count(*) FROM started)  AS started,
+                  (SELECT count(*) FROM finished) AS finished
+                """,
+                slug,
+            )
+        started = row["started"] or 0
+        finished = row["finished"] or 0
+        return {
+            "slug": slug,
+            "started": started,
+            "finished": finished,
+            "completion_rate": (finished / started) if started else 0.0,
+        }
+
+    async def return_rate(self, within_days: int = 7) -> dict:
+        """Share of users who came back on a later day within the window.
+
+        The second half of the go/no-go (D8): completion is necessary, return is
+        what separates a company from a feature. A user 'returns' if they have
+        events on two or more distinct calendar days.
+        """
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                WITH per_user AS (
+                  SELECT anon_id,
+                         count(DISTINCT date_trunc('day', created_at)) AS active_days
+                  FROM events
+                  WHERE created_at > now() - ($1 || ' days')::interval
+                  GROUP BY anon_id
+                )
+                SELECT
+                  count(*)                                   AS users,
+                  count(*) FILTER (WHERE active_days >= 2)    AS returned
+                FROM per_user
+                """,
+                str(within_days),
+            )
+        users = row["users"] or 0
+        returned = row["returned"] or 0
+        return {
+            "window_days": within_days,
+            "users": users,
+            "returned": returned,
+            "return_rate": (returned / users) if users else 0.0,
+        }
+
+    async def clip_watch_depth(self, slug: str) -> list[dict]:
+        """Mean fraction watched per clip position — where attention drops off.
+
+        A page can be 'completed' by scrolling past clips without watching them;
+        this is the sharper signal of whether the curation actually held.
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT position,
+                       avg(value)  AS mean_watched,
+                       count(*)    AS views
+                FROM events
+                WHERE slug = $1 AND kind = 'clip_complete' AND position IS NOT NULL
+                GROUP BY position
+                ORDER BY position
+                """,
+                slug,
+            )
+        return [
+            {
+                "position": r["position"],
+                "mean_watched": float(r["mean_watched"] or 0.0),
+                "views": r["views"],
+            }
+            for r in rows
+        ]
+
+    async def satisfaction(self, slug: str) -> dict:
+        """The one-tap 'got what I came for' signal (D4)."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT count(*) AS responses, avg(value) AS mean_rating
+                FROM events
+                WHERE slug = $1 AND kind = 'satisfaction'
+                """,
+                slug,
+            )
+        return {
+            "slug": slug,
+            "responses": row["responses"] or 0,
+            "mean_rating": float(row["mean_rating"]) if row["mean_rating"] is not None else None,
+        }

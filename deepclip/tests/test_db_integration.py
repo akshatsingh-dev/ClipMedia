@@ -1,16 +1,15 @@
 """Integration tests for the DB layer against a real Postgres + pgvector.
 
-NOT RUN IN THIS ENVIRONMENT. Docker Hub is unreachable here (even a 13KB image
-fails to pull), so every line of SQL in packages/db/repo.py is currently
-unexecuted. These tests exist so that gap closes with one command the moment a
-database is available:
+Gated behind DEEPCLIP_DB=1 so the default offline suite stays hermetic:
 
     docker compose up -d postgres
     DEEPCLIP_DB=1 python3 -m pytest tests/test_db_integration.py -q
 
-They cover the things unit tests structurally cannot: whether the SQL parses,
-whether pgvector casts work, whether ON CONFLICT clauses behave as intended, and
-whether the build-claim lock actually prevents duplicate builds.
+They cover what unit tests structurally cannot: whether the SQL parses, whether
+pgvector casts and similarity ordering work, whether ON CONFLICT clauses behave
+as intended, whether the build-claim lock prevents duplicate builds, and whether
+the analytics aggregates compute the go/no-go metrics correctly. This suite found
+the credibility data-loss bug (D33) that every fake-backed test had passed.
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ async def repo():
     r = await Repo.connect(DSN)
     await r.init_schema()
     async with r.pool.acquire() as conn:
-        await conn.execute("TRUNCATE segments, videos, deep_pages, learning_paths, hint_cache CASCADE")
+        await conn.execute("TRUNCATE segments, videos, deep_pages, learning_paths, hint_cache, events CASCADE")
     yield r
     await r.close()
 
@@ -223,3 +222,112 @@ async def test_channel_credibility_roundtrip(repo):
     await repo.upsert_video(VideoRow(id="v1", source="youtube", channel_id="UC1"))
     await repo.set_channel_credibility("UC1", 0.87)
     assert await repo.channel_credibility("UC1") == pytest.approx(0.87)
+
+
+# -- analytics (D4/D8 go/no-go metrics) ---------------------------------
+
+
+async def _events(repo, rows):
+    from packages.db.repo import EventRow
+    return await repo.insert_events([EventRow(**r) for r in rows])
+
+
+async def test_page_completion_rate_over_distinct_sessions(repo):
+    """Two sessions start, one finishes -> 50%. Reloads must not inflate it."""
+    await _events(repo, [
+        {"anon_id": "a", "session_id": "s1", "kind": "page_view", "slug": "gandhi"},
+        {"anon_id": "a", "session_id": "s1", "kind": "page_view", "slug": "gandhi"},  # reload
+        {"anon_id": "b", "session_id": "s2", "kind": "page_view", "slug": "gandhi"},
+        {"anon_id": "a", "session_id": "s1", "kind": "page_complete", "slug": "gandhi"},
+    ])
+    r = await repo.page_completion_rate("gandhi")
+    assert r["started"] == 2
+    assert r["finished"] == 1
+    assert r["completion_rate"] == 0.5
+
+
+async def test_completion_counts_end_card_as_finished(repo):
+    await _events(repo, [
+        {"anon_id": "a", "session_id": "s1", "kind": "page_view", "slug": "speed"},
+        {"anon_id": "a", "session_id": "s1", "kind": "end_card", "slug": "speed"},
+    ])
+    r = await repo.page_completion_rate("speed")
+    assert r["completion_rate"] == 1.0
+
+
+async def test_completion_rate_zero_when_none_started(repo):
+    r = await repo.page_completion_rate("never-viewed")
+    assert r["started"] == 0
+    assert r["completion_rate"] == 0.0
+
+
+async def test_return_rate_needs_two_distinct_days(repo):
+    """One user active on 2 days returned; another on 1 day did not."""
+    from packages.db.repo import EventRow
+    await repo.insert_events([EventRow(anon_id="a", session_id="s", kind="page_view")])
+    # Backdate one of user a's events to yesterday.
+    async with repo.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO events (anon_id, session_id, kind, created_at) "
+            "VALUES ('a','s2','page_view', now() - interval '1 day')"
+        )
+        await conn.execute(
+            "INSERT INTO events (anon_id, session_id, kind, created_at) "
+            "VALUES ('b','s3','page_view', now())"
+        )
+    r = await repo.return_rate(within_days=7)
+    assert r["users"] == 2
+    assert r["returned"] == 1
+    assert r["return_rate"] == 0.5
+
+
+async def test_return_rate_empty(repo):
+    r = await repo.return_rate()
+    assert r["users"] == 0
+    assert r["return_rate"] == 0.0
+
+
+async def test_clip_watch_depth_by_position(repo):
+    await _events(repo, [
+        {"anon_id": "a", "session_id": "s", "kind": "clip_complete", "slug": "g", "position": 0, "value": 1.0},
+        {"anon_id": "b", "session_id": "s2", "kind": "clip_complete", "slug": "g", "position": 0, "value": 0.5},
+        {"anon_id": "a", "session_id": "s", "kind": "clip_complete", "slug": "g", "position": 1, "value": 0.2},
+    ])
+    depth = await repo.clip_watch_depth("g")
+    by_pos = {d["position"]: d for d in depth}
+    assert by_pos[0]["mean_watched"] == 0.75
+    assert by_pos[0]["views"] == 2
+    assert by_pos[1]["mean_watched"] == pytest.approx(0.2)
+
+
+async def test_satisfaction_mean(repo):
+    await _events(repo, [
+        {"anon_id": "a", "session_id": "s", "kind": "satisfaction", "slug": "g", "value": 1.0},
+        {"anon_id": "b", "session_id": "s2", "kind": "satisfaction", "slug": "g", "value": 0.0},
+    ])
+    s = await repo.satisfaction("g")
+    assert s["responses"] == 2
+    assert s["mean_rating"] == 0.5
+
+
+async def test_satisfaction_none_yet(repo):
+    s = await repo.satisfaction("g")
+    assert s["responses"] == 0
+    assert s["mean_rating"] is None
+
+
+async def test_insert_events_empty_is_zero(repo):
+    assert await repo.insert_events([]) == 0
+
+
+async def test_event_meta_roundtrips(repo):
+    from packages.db.repo import EventRow
+    await repo.insert_events([
+        EventRow(anon_id="a", session_id="s", kind="report",
+                 slug="g", video_id="v1", meta={"reason": "wrong clip"})
+    ])
+    async with repo.pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT meta FROM events WHERE kind='report'")
+    import json as _json
+    meta = row["meta"] if isinstance(row["meta"], dict) else _json.loads(row["meta"])
+    assert meta["reason"] == "wrong clip"
