@@ -2,6 +2,7 @@
 
 import ClipPlayer from "./ClipPlayer";
 import ReportButton from "./ReportButton";
+import AddToStream from "./AddToStream";
 import { formatTime } from "@/lib/format";
 import type { Chapter } from "@/lib/types";
 
@@ -76,7 +77,8 @@ export default function ChapterSection({
                 >
                   {formatTime(clip.t_start)}–{formatTime(clip.t_end)} · full video ↗
                 </a>
-                <div className="mt-1">
+                <div className="mt-1 flex items-center gap-3">
+                  <AddToStream clip={clip} />
                   <ReportButton
                     slug={slug}
                     mode="learn"

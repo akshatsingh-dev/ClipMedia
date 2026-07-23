@@ -615,3 +615,39 @@ A build froze at the assembly stage when the free-tier Gemini tokens ran out —
 the SDK hung on internal retries. Added a per-request timeout
 (`GEMINI_TIMEOUT_MS`, default 60s) so a quota-exhausted build fails cleanly into
 the existing degradation paths instead of hanging a worker slot.
+
+## D51 — Perspective streams (the founder's core vision, ethical version)
+User-authored, shareable streams of real clips that express a viewpoint
+(research/perspective-streams.md). This is the strongest form of the "create your
+own narrative" idea, and it is the *inverse* of the covert-control idea both
+research agents flagged as a legal/PR trap (YouTube ToS bans filtering "without
+their knowledge or consent"; Character.AI wrongful-death suits are the template).
+
+Transparency is enforced in the product, not optional:
+- A shared `/stream/[id]` page is labeled "A personal perspective" and carries a
+  "want the other sides? see multiple perspectives" link — you cannot present a
+  stream as objective truth.
+- Every clip credits and links its source.
+- The share endpoint strips the author's anon_id (a link must not leak identity),
+  and delete is owner-only (a share link cannot delete someone else's stream).
+
+Built end to end with no LLM and no YouTube quota — schema, repo, API,
+`/streams` builder, `/stream/[id]` share view, and an "Add to stream" button on
+clips. Verified live: create → add clips → fetch shared view, anon_id hidden.
+
+Part 2 (multi-lens "supportive/critical/neutral" auto-build for a contested
+query) is designed in the research doc and gated on LLM tokens; it reuses the
+contested-source handling already in credibility.py, and the assembler must
+produce >=2 lenses or fail so a one-sided build is impossible.
+
+## D52 — Parental-control research: transparent-only, per two independent agents
+Two research passes (research/parental-control-*.md) both conclude: build
+transparent parental curation, never covert control. The decisive facts: YouTube
+API ToS forbids filtering a user's access "without their knowledge or consent"
+(covert framing is a per-se violation that revokes the API key the whole pipeline
+needs); Character.AI is settling wrongful-death suits framed as covertly
+shaping a child's beliefs; FTC Section 5 / COPPA / AADC all disfavour it; and the
+monitoring research shows covert control backfires (~4x bypass). The transparent
+version is a real ~$1.5B→~$5B market where no incumbent does moment-level curation
+of real footage — Deep Clip Search's exact engine. Recorded for a future
+decision; no code committed to that direction.

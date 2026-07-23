@@ -94,3 +94,28 @@ CREATE TABLE IF NOT EXISTS saved_pages (
   PRIMARY KEY (anon_id, slug)
 );
 CREATE INDEX IF NOT EXISTS saved_pages_anon_idx ON saved_pages (anon_id, saved_at DESC);
+
+-- Perspective streams (research/perspective-streams.md). A user-authored,
+-- ordered collection of real clips expressing a viewpoint, shareable by link.
+-- Always attributed as a personal perspective in the UI -- never objective truth.
+CREATE TABLE IF NOT EXISTS streams (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  anon_id    TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  stance     TEXT,
+  is_public  BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS streams_anon_idx ON streams (anon_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS stream_clips (
+  stream_id    UUID REFERENCES streams(id) ON DELETE CASCADE,
+  position     INT NOT NULL,
+  video_id     TEXT NOT NULL,
+  t_start      REAL NOT NULL,
+  t_end        REAL NOT NULL,
+  note         TEXT,
+  channel      TEXT,
+  video_title  TEXT,
+  PRIMARY KEY (stream_id, position)
+);

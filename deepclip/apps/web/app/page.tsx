@@ -22,7 +22,7 @@ export default async function Home() {
           <SearchBox />
         </div>
         <p className="mt-4 text-sm text-white/40">
-          <Link href="/saved" className="text-white/60 hover:text-accent">★ Saved pages</Link>
+          <Link href="/saved" className="text-white/60 hover:text-accent">★ Saved</Link>{" · "}<Link href="/streams" className="text-white/60 hover:text-accent">◆ Your perspectives</Link>
           {" · "}Or{" "}
           <Link href="/import" className="text-accent hover:underline">
             paste a clip you already loved

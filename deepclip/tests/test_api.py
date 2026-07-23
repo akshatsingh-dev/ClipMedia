@@ -561,3 +561,65 @@ def test_unsave_flow(client):
 def test_saved_requires_anon_id(client):
     client.app.state.repo = SavedFakeRepo()
     assert client.get("/api/saved").status_code == 422
+
+
+# -- perspective streams ------------------------------------------------
+
+
+class StreamFakeRepo(FakeRepo):
+    def __init__(self):
+        super().__init__()
+        self.streams = {}
+        self._n = 0
+    async def create_stream(self, anon_id, title, stance, is_public=True):
+        self._n += 1; sid = f"stream-{self._n}"
+        self.streams[sid] = {"id": sid, "anon_id": anon_id, "title": title, "stance": stance, "clips": []}
+        return sid
+    async def add_stream_clip(self, stream_id, clip):
+        s = self.streams[stream_id]; s["clips"].append(clip); return len(s["clips"]) - 1
+    async def get_stream(self, stream_id):
+        return dict(self.streams.get(stream_id)) if stream_id in self.streams else None
+    async def list_streams(self, anon_id, limit=100):
+        return [{"id": s["id"], "title": s["title"], "stance": s["stance"], "clip_count": len(s["clips"])}
+                for s in self.streams.values() if s["anon_id"] == anon_id]
+    async def delete_stream(self, stream_id, anon_id):
+        s = self.streams.get(stream_id)
+        if s and s["anon_id"] == anon_id: del self.streams[stream_id]; return True
+        return False
+
+
+def test_create_stream_with_clips(client):
+    client.app.state.repo = StreamFakeRepo()
+    body = client.post("/api/streams", json={
+        "anon_id": "a", "title": "My case", "stance": "because",
+        "clips": [{"video_id": "v1", "t_start": 10, "t_end": 40}]}).json()
+    assert body["id"] == "stream-1"
+
+
+def test_get_stream_hides_author_anon_id(client):
+    """A share link must not leak the author's identity."""
+    repo = StreamFakeRepo(); client.app.state.repo = repo
+    sid = client.post("/api/streams", json={"anon_id": "secret-author", "title": "T"}).json()["id"]
+    body = client.get(f"/api/streams/{sid}").json()
+    assert "anon_id" not in body
+    assert body["title"] == "T"
+
+
+def test_add_clip_to_stream(client):
+    repo = StreamFakeRepo(); client.app.state.repo = repo
+    sid = client.post("/api/streams", json={"anon_id": "a", "title": "T"}).json()["id"]
+    r = client.post(f"/api/streams/{sid}/clips", json={"video_id": "v1", "t_start": 5, "t_end": 20})
+    assert r.status_code == 201
+    assert r.json()["position"] == 0
+
+
+def test_get_missing_stream_404(client):
+    client.app.state.repo = StreamFakeRepo()
+    assert client.get("/api/streams/nope").status_code == 404
+
+
+def test_delete_stream_requires_owner(client):
+    repo = StreamFakeRepo(); client.app.state.repo = repo
+    sid = client.post("/api/streams", json={"anon_id": "owner", "title": "T"}).json()["id"]
+    assert client.request("DELETE", f"/api/streams/{sid}", params={"anon_id": "other"}).status_code == 404
+    assert client.request("DELETE", f"/api/streams/{sid}", params={"anon_id": "owner"}).json()["removed"] is True

@@ -370,6 +370,64 @@ async def list_saved(request: Request, anon_id: str, limit: int = 100):
     return {"saved": rows}
 
 
+# -- perspective streams (research/perspective-streams.md) ---------------
+
+
+class StreamClipIn(BaseModel):
+    video_id: str = Field(min_length=1, max_length=32)
+    t_start: float
+    t_end: float
+    note: str | None = Field(default=None, max_length=500)
+    channel: str | None = Field(default=None, max_length=200)
+    video_title: str | None = Field(default=None, max_length=300)
+
+
+class CreateStreamRequest(BaseModel):
+    anon_id: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=200)
+    stance: str | None = Field(default=None, max_length=1000)
+    clips: list[StreamClipIn] = Field(default_factory=list, max_length=100)
+
+
+@app.post("/api/streams", status_code=201)
+async def create_stream(req: CreateStreamRequest, request: Request):
+    repo = _repo(request)
+    stream_id = await repo.create_stream(req.anon_id, req.title, req.stance)
+    for clip in req.clips:
+        await repo.add_stream_clip(stream_id, clip.model_dump())
+    return {"id": stream_id}
+
+
+@app.post("/api/streams/{stream_id}/clips", status_code=201)
+async def add_stream_clip(stream_id: str, clip: StreamClipIn, request: Request):
+    pos = await _repo(request).add_stream_clip(stream_id, clip.model_dump())
+    return {"position": pos}
+
+
+@app.get("/api/streams/{stream_id}")
+async def get_stream(stream_id: str, request: Request):
+    stream = await _repo(request).get_stream(stream_id)
+    if not stream:
+        raise HTTPException(404, "stream not found")
+    # A share link should not leak the author's anon_id.
+    stream.pop("anon_id", None)
+    return stream
+
+
+@app.get("/api/streams")
+async def list_streams(request: Request, anon_id: str, limit: int = 100):
+    rows = await _repo(request).list_streams(anon_id, limit=min(max(limit, 1), 200))
+    return {"streams": rows}
+
+
+@app.delete("/api/streams/{stream_id}")
+async def delete_stream(stream_id: str, request: Request, anon_id: str):
+    removed = await _repo(request).delete_stream(stream_id, anon_id)
+    if not removed:
+        raise HTTPException(404, "stream not found or not yours")
+    return {"removed": True}
+
+
 class TutorRequest(BaseModel):
     slug: str = Field(min_length=1, max_length=300)
     video_id: str = Field(min_length=1, max_length=32)

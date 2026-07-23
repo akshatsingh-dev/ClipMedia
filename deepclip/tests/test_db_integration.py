@@ -39,7 +39,7 @@ async def repo():
     r = await Repo.connect(DSN)
     await r.init_schema()
     async with r.pool.acquire() as conn:
-        await conn.execute("TRUNCATE segments, videos, deep_pages, learning_paths, hint_cache, events, saved_pages CASCADE")
+        await conn.execute("TRUNCATE segments, videos, deep_pages, learning_paths, hint_cache, events, saved_pages, streams, stream_clips CASCADE")
     yield r
     await r.close()
 
@@ -391,3 +391,54 @@ async def test_is_saved(repo):
     assert await repo.is_saved("anon1", "gandhi") is False
     await repo.save_page_for_user("anon1", "gandhi", "learn", "G")
     assert await repo.is_saved("anon1", "gandhi") is True
+
+
+# -- perspective streams ------------------------------------------------
+
+
+async def test_create_stream_and_get(repo):
+    sid = await repo.create_stream("anon1", "My case for X", "I think X because...")
+    await repo.add_stream_clip(sid, {"video_id": "v1", "t_start": 10, "t_end": 40, "note": "key point", "channel": "C", "video_title": "T"})
+    await repo.add_stream_clip(sid, {"video_id": "v2", "t_start": 5, "t_end": 30})
+    s = await repo.get_stream(sid)
+    assert s["title"] == "My case for X"
+    assert len(s["clips"]) == 2
+    assert s["clips"][0]["position"] == 0
+    assert s["clips"][1]["position"] == 1
+    assert s["clips"][0]["credit_url"].endswith("t=10s")
+
+
+async def test_stream_clip_positions_autoincrement(repo):
+    sid = await repo.create_stream("a", "s", None)
+    p0 = await repo.add_stream_clip(sid, {"video_id": "v1", "t_start": 0, "t_end": 10})
+    p1 = await repo.add_stream_clip(sid, {"video_id": "v2", "t_start": 0, "t_end": 10})
+    assert (p0, p1) == (0, 1)
+
+
+async def test_list_streams_with_clip_count(repo):
+    sid = await repo.create_stream("anon1", "S1", None)
+    await repo.add_stream_clip(sid, {"video_id": "v1", "t_start": 0, "t_end": 10})
+    rows = await repo.list_streams("anon1")
+    assert rows[0]["clip_count"] == 1
+
+
+async def test_get_missing_stream(repo):
+    import uuid as _uuid
+    assert await repo.get_stream(str(_uuid.uuid4())) is None
+
+
+async def test_delete_stream_only_by_owner(repo):
+    sid = await repo.create_stream("owner", "S", None)
+    assert await repo.delete_stream(sid, "someone_else") is False, "non-owner must not delete"
+    assert await repo.get_stream(sid) is not None
+    assert await repo.delete_stream(sid, "owner") is True
+    assert await repo.get_stream(sid) is None
+
+
+async def test_delete_stream_cascades_clips(repo):
+    sid = await repo.create_stream("owner", "S", None)
+    await repo.add_stream_clip(sid, {"video_id": "v1", "t_start": 0, "t_end": 10})
+    await repo.delete_stream(sid, "owner")
+    async with repo.pool.acquire() as conn:
+        n = await conn.fetchval("SELECT count(*) FROM stream_clips WHERE stream_id = $1::uuid", sid)
+    assert n == 0

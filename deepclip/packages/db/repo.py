@@ -580,6 +580,116 @@ class Repo:
             for r in rows
         ]
 
+    # -- perspective streams (user-authored, shareable) ------------------
+
+    async def create_stream(
+        self, anon_id: str, title: str, stance: str | None, is_public: bool = True
+    ) -> str:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO streams (anon_id, title, stance, is_public)
+                VALUES ($1, $2, $3, $4) RETURNING id
+                """,
+                anon_id, title, stance, is_public,
+            )
+        return str(row["id"])
+
+    async def add_stream_clip(self, stream_id: str, clip: dict) -> int:
+        """Append a clip to a stream. Position is assigned server-side so two
+        concurrent adds cannot collide on the same index."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT coalesce(max(position), -1) + 1 AS pos "
+                    "FROM stream_clips WHERE stream_id = $1::uuid",
+                    stream_id,
+                )
+                pos = row["pos"]
+                await conn.execute(
+                    """
+                    INSERT INTO stream_clips
+                      (stream_id, position, video_id, t_start, t_end, note,
+                       channel, video_title)
+                    VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8)
+                    """,
+                    stream_id, pos, clip["video_id"], float(clip["t_start"]),
+                    float(clip["t_end"]), clip.get("note"), clip.get("channel"),
+                    clip.get("video_title"),
+                )
+        return pos
+
+    async def get_stream(self, stream_id: str) -> dict | None:
+        async with self.pool.acquire() as conn:
+            head = await conn.fetchrow(
+                "SELECT * FROM streams WHERE id = $1::uuid", stream_id
+            )
+            if not head:
+                return None
+            clips = await conn.fetch(
+                """
+                SELECT position, video_id, t_start, t_end, note, channel, video_title
+                FROM stream_clips WHERE stream_id = $1::uuid ORDER BY position
+                """,
+                stream_id,
+            )
+        return {
+            "id": str(head["id"]),
+            "anon_id": head["anon_id"],
+            "title": head["title"],
+            "stance": head["stance"],
+            "is_public": head["is_public"],
+            "created_at": head["created_at"].isoformat() if head["created_at"] else None,
+            "clips": [
+                {
+                    "position": c["position"],
+                    "video_id": c["video_id"],
+                    "t_start": c["t_start"],
+                    "t_end": c["t_end"],
+                    "note": c["note"],
+                    "channel": c["channel"],
+                    "video_title": c["video_title"],
+                    "credit_url": f"https://www.youtube.com/watch?v={c['video_id']}&t={int(c['t_start'])}s",
+                    "thumbnail": f"https://i.ytimg.com/vi/{c['video_id']}/hqdefault.jpg",
+                }
+                for c in clips
+            ],
+        }
+
+    async def list_streams(self, anon_id: str, limit: int = 100) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT s.id, s.title, s.stance, s.created_at,
+                       count(c.position) AS clip_count
+                FROM streams s
+                LEFT JOIN stream_clips c ON c.stream_id = s.id
+                WHERE s.anon_id = $1
+                GROUP BY s.id ORDER BY s.created_at DESC LIMIT $2
+                """,
+                anon_id, limit,
+            )
+        return [
+            {
+                "id": str(r["id"]),
+                "title": r["title"],
+                "stance": r["stance"],
+                "clip_count": r["clip_count"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+            for r in rows
+        ]
+
+    async def delete_stream(self, stream_id: str, anon_id: str) -> bool:
+        """Delete only if the caller owns it — a share link must not let a
+        viewer delete someone else's stream."""
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM streams WHERE id = $1::uuid AND anon_id = $2",
+                stream_id, anon_id,
+            )
+        return result.endswith("1")
+
     # -- saved pages (D3, Pro tier) --------------------------------------
 
     async def save_page_for_user(
