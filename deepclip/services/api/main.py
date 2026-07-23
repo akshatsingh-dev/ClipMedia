@@ -405,12 +405,15 @@ async def add_stream_clip(stream_id: str, clip: StreamClipIn, request: Request):
 
 
 @app.get("/api/streams/{stream_id}")
-async def get_stream(stream_id: str, request: Request):
+async def get_stream(stream_id: str, request: Request, viewer: str | None = None):
     stream = await _repo(request).get_stream(stream_id)
     if not stream:
         raise HTTPException(404, "stream not found")
-    # A share link should not leak the author's anon_id.
-    stream.pop("anon_id", None)
+    # The author id never leaves the server. Instead, if the viewer passes their
+    # own anon id, tell them whether they own it — enough to show edit controls
+    # without exposing who the author is.
+    author = stream.pop("anon_id", None)
+    stream["is_owner"] = bool(viewer) and viewer == author
     return stream
 
 

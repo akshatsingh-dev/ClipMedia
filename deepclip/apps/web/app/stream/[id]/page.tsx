@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import ClipPlayer from "@/components/ClipPlayer";
+import StreamOwnerControls from "@/components/StreamOwnerControls";
 import { API_BASE } from "@/lib/api";
 
 /**
@@ -55,6 +56,8 @@ export default async function StreamPage({ params }: { params: { id: string } })
           primary footage · every clip credits its source
         </p>
       </header>
+
+      <StreamOwnerControls streamId={params.id} />
 
       <div className="mt-8 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-white/55">
         This is a viewpoint someone assembled, not a neutral summary. Want the

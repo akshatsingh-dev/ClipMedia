@@ -722,3 +722,22 @@ the harness reaps that task, which orphaned an in-flight build (it saved as
 'failed'). Relaunching with `setsid nohup ... </dev/null &` fully detaches it
 from the session so it survives. One-shot build scripts survive run_in_background
 fine; only the long-lived worker needed the stronger detachment.
+
+## D57 — Both transcript paths now IP-blocked; streams editing UI shipped
+After a day of heavy use, YouTube blocks BOTH transcript paths from this IP:
+captions return 429 (IpBlocked) and audio downloads (for Whisper) now return
+403 Forbidden. So no live build can obtain transcripts at all right now,
+regardless of search quota. A perspectives build reached all three lenses in
+retrieval, then failed at transcripts with 403s on every audio download. This is
+the D6 platform-dependency risk at full strength — the honest conclusion is that
+reliable transcript access needs residential proxies; IP-based access alone does
+not survive sustained use. The pipeline itself is proven (the vaccines learn page
+built end to end earlier, before the audio endpoint was blocked).
+
+Shipped the no-quota work instead: stream editing. A shared stream never exposes
+its author id, so ownership is checked by passing the viewer's anon id to
+GET /api/streams/{id}?viewer=... which returns an `is_owner` flag; edit controls
+render only for the owner, and every mutation is owner-checked server-side
+regardless. A dedicated /streams/{id}/edit page reorders (up/down), removes clips
+(gap closed), and deletes the stream. Verified live: owner/stranger detection,
+reorder, remove, and a non-owner edit correctly rejected with 400.
