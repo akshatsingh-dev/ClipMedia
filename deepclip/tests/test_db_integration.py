@@ -29,13 +29,40 @@ pytestmark = [
     pytest.mark.asyncio,
 ]
 
+# A DEDICATED test database, never the dev/prod one. These tests TRUNCATE every
+# table between cases, so pointing them at a DB with real content destroys it —
+# which is exactly what happened once (a real built page was wiped). The default
+# is a separate `deepclip_test` DB, auto-created below, so a stray test run can
+# never touch real data. Override only with another throwaway DB.
+TEST_DB_NAME = os.environ.get("TEST_DB_NAME", "deepclip_test")
 DSN = os.environ.get(
-    "TEST_DATABASE_URL", "postgresql://deepclip:deepclip@localhost:5432/deepclip"
+    "TEST_DATABASE_URL",
+    f"postgresql://deepclip:deepclip@localhost:5432/{TEST_DB_NAME}",
 )
+_ADMIN_DSN = "postgresql://deepclip:deepclip@localhost:5432/postgres"
+
+
+async def _ensure_test_db() -> None:
+    """Create the test database if it does not exist. Refuses to proceed if the
+    target DSN is the dev database, so the truncating fixture can never wipe it."""
+    if "/deepclip_test" not in DSN and os.environ.get("TEST_DATABASE_URL") is None:
+        raise RuntimeError("refusing to run truncating tests against a non-test DB")
+    import asyncpg
+
+    conn = await asyncpg.connect(_ADMIN_DSN)
+    try:
+        exists = await conn.fetchval(
+            "SELECT 1 FROM pg_database WHERE datname = $1", TEST_DB_NAME
+        )
+        if not exists:
+            await conn.execute(f'CREATE DATABASE "{TEST_DB_NAME}"')
+    finally:
+        await conn.close()
 
 
 @pytest.fixture
 async def repo():
+    await _ensure_test_db()
     r = await Repo.connect(DSN)
     await r.init_schema()
     async with r.pool.acquire() as conn:

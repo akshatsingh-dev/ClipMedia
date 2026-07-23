@@ -674,3 +674,22 @@ metadata is translated to QuotaExceeded and degrades gracefully (ships the page
 built so far), which is the D6 #1-risk behaviour the ledger was meant to give.
 The YouTube quota is exhausted for today from the day's builds; it resets at
 midnight Pacific.
+
+## D54 — Mistake: DB integration tests wiped the dev database
+I ran the DB integration suite against the same Postgres database that held the
+first real built page ("how vaccines work"). The test fixture TRUNCATEs every
+table between cases, so it destroyed that page. It is unrecoverable today because
+the YouTube daily quota is spent, so it cannot be rebuilt until the quota resets.
+
+Root cause: `TEST_DATABASE_URL` defaulted to the dev database. A truncating test
+must never share a database with real data.
+
+Fix: the fixture now defaults to a dedicated `deepclip_test` database (auto-created)
+and refuses to run if pointed at a non-test DB. Verified: after a full test run,
+the dev `deepclip` database is untouched. Recording this plainly rather than
+quietly — it is exactly the kind of destructive-test mistake that should never
+recur, and the guard now makes it structurally impossible.
+
+The vaccines page had already served its purpose: it proved the full real
+pipeline (Whisper transcript → moments → Gemini assembly → Postgres → frontend →
+tutor) end to end. It will be rebuilt once the YouTube quota resets.
