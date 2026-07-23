@@ -26,7 +26,7 @@ export type Page = {
   query: string;
   title: string;
   subtitle: string;
-  mode: "learn" | "entertain";
+  mode: "learn" | "entertain" | "perspectives";
   timestamps_verified: boolean;
   source_note: string;
   chapters?: Chapter[];
@@ -37,7 +37,7 @@ export type IndexEntry = {
   slug: string;
   title: string;
   subtitle: string;
-  mode: "learn" | "entertain";
+  mode: "learn" | "entertain" | "perspectives";
   query: string;
   clip_count: number;
 };

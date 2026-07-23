@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import ChapterSection from "@/components/ChapterSection";
+import PerspectivesView from "@/components/PerspectivesView";
 import UnverifiedBanner from "@/components/UnverifiedBanner";
 import SaveButton from "@/components/SaveButton";
 import {
@@ -18,7 +19,17 @@ export const dynamicParams = true;
 
 export default async function LearnPage({ params }: { params: { slug: string } }) {
   const page = await getPage(params.slug);
-  if (!page || page.mode !== "learn" || !page.chapters) notFound();
+  if (!page) notFound();
+  if (page.mode === "perspectives") {
+    return (
+      <main className="mx-auto max-w-3xl px-6 pb-24 pt-10">
+        <Link href="/" className="text-sm text-white/45 hover:text-white">← all pages</Link>
+        <PageViewTracker slug={page.slug} mode="perspectives" />
+        <PerspectivesView page={page} />
+      </main>
+    );
+  }
+  if (page.mode !== "learn" || !page.chapters) notFound();
 
   const totalClips = page.chapters.reduce((n, c) => n + c.clips.length, 0);
 

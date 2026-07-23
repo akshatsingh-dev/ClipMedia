@@ -300,6 +300,109 @@ def assemble_entertain(
     }
 
 
+PERSPECTIVES_SYSTEM = """You assemble a balanced multi-perspective page about a \
+contested subject. Each lens (supportive / critical / neutral) already has its \
+clips; you write a one-sentence, non-partisan summary of what that lens argues, \
+grounded ONLY in its clip transcripts, plus a short caption per clip.
+
+You do not take a side and you do not editorialise. The supportive summary states \
+the case FOR neutrally ("Supporters argue..."), the critical the case AGAINST \
+("Critics argue..."). Output JSON only."""
+
+PERSPECTIVES_PROMPT = """Subject: {title}
+
+Lenses and their clips:
+
+{lenses}
+
+Return JSON:
+{{"subject":"...","lenses":[{{"label":"supportive|critical|neutral",
+  "stance":"<one neutral sentence: what this side argues>",
+  "clips":[{{"video_id":"...","t_start":<seconds>,"why":"<caption>"}}]}}]}}
+
+Keep every clip. Keep all lenses."""
+
+MIN_ASSEMBLED_LENSES = 2
+
+
+def assemble_perspectives(
+    outline: Outline,
+    lens_clips: dict[str, list[Candidate]],
+    llm: LLMClient,
+) -> dict:
+    """Build a balanced perspectives page.
+
+    Hard guardrail (research/perspective-streams.md): the page must carry at least
+    two lenses, or it is not shipped. A one-sided "perspectives" page is the exact
+    manipulation this feature exists to prevent, so it raises rather than degrades.
+    """
+    present = {label for label, clips in lens_clips.items() if clips}
+    if len(present) < MIN_ASSEMBLED_LENSES:
+        raise LLMError(
+            f"only {len(present)} lens(es) had clips; a perspectives page needs "
+            f">= {MIN_ASSEMBLED_LENSES}. Refusing to ship a one-sided page."
+        )
+
+    prompt = PERSPECTIVES_PROMPT.format(
+        title=outline.title, lenses=_render_sections(lens_clips)
+    )
+    resp = llm.complete(
+        prompt, system=PERSPECTIVES_SYSTEM, model=MODEL_SMART, max_tokens=4096
+    )
+    data = extract_json(resp.text)
+    if not isinstance(data, dict):
+        raise LLMError("perspectives assembly did not return an object")
+
+    lookup = _clip_lookup(lens_clips)
+    evidence_by_lens = {
+        label: " ".join(c.text for c in clips) for label, clips in lens_clips.items()
+    }
+
+    lenses_out = []
+    for lens in data.get("lenses") or []:
+        if not isinstance(lens, dict):
+            continue
+        label = str(lens.get("label", "")).strip().lower()
+        stance = str(lens.get("stance", "")).strip()
+        # The stance must not assert facts absent from that lens's own clips.
+        if stance and verify_no_new_facts(stance, evidence_by_lens.get(label, "")):
+            stance = ""
+        clips_out = []
+        for mc in lens.get("clips") or []:
+            if not isinstance(mc, dict):
+                continue
+            cand = _resolve(mc, lookup)
+            if cand is None:
+                continue
+            clips_out.append(
+                {
+                    "video_id": cand.video_id,
+                    "t_start": cand.t_start,
+                    "t_end": cand.t_end,
+                    "why": str(mc.get("why", "")).strip(),
+                    "transcript": cand.text,
+                }
+            )
+        if clips_out:
+            lenses_out.append({"label": label, "stance": stance, "clips": clips_out})
+
+    # Re-check after resolution: the model could have collapsed lenses.
+    if len({l["label"] for l in lenses_out}) < MIN_ASSEMBLED_LENSES:
+        raise LLMError("perspectives assembly collapsed to <2 lenses")
+
+    return {
+        "title": str(data.get("subject") or outline.title).strip(),
+        "mode": "perspectives",
+        "query": outline.query,
+        "subject": outline.subject,
+        "lenses": lenses_out,
+        "notice": (
+            "This page shows a contested subject through multiple lenses, each "
+            "built from real clips. No lens is the platform's view."
+        ),
+    }
+
+
 _SENT = re.compile(r"(?<=[.!?])\s+")
 
 

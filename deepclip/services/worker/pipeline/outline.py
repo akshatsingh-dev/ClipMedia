@@ -18,6 +18,12 @@ from ..llm.client import MODEL_SMART, LLMClient, LLMError, extract_json
 MIN_CHAPTERS, MAX_CHAPTERS = 4, 10
 MIN_GROUPINGS, MAX_GROUPINGS = 3, 5
 
+# The lenses for the multi-perspective view (research/perspective-streams.md).
+# Fixed and labeled so a build is always balanced by construction — you cannot
+# get a one-sided "perspectives" page.
+LENS_LABELS = ("supportive", "critical", "neutral")
+MIN_LENSES = 2  # a perspectives page with <2 lenses is invalid — that is the guardrail
+
 SYSTEM = """You plan video-curation pages. You never write prose for the user; \
 you only produce JSON plans that a retrieval pipeline consumes.
 
@@ -55,6 +61,33 @@ order):
 
 If entertain, use this shape ({min_gr}-{max_gr} groupings):
 {entertain_shape}
+
+JSON only."""
+
+
+PERSPECTIVES_SYSTEM = """You plan a multi-perspective video page about a \
+contested subject. The goal is that a viewer sees the subject through several \
+labeled lenses — supportive, critical, and neutral — each built from real clips.
+
+You NEVER take a side. You plan honest search hints for each lens so the page is \
+balanced. For "supportive", hints that surface the case FOR; for "critical", the \
+case AGAINST; for "neutral", explanatory or fact-checking coverage.
+
+Output JSON only. No commentary."""
+
+PERSPECTIVES_SHAPE = """{"mode":"perspectives","subject":"<subject>",
+ "title":"<neutral page title>",
+ "lenses":[{"label":"supportive","search_hints":["...","..."]},
+           {"label":"critical","search_hints":["...","..."]},
+           {"label":"neutral","search_hints":["...","..."]}]}"""
+
+PERSPECTIVES_PROMPT = """Subject: {subject}
+
+Plan a balanced multi-perspective page. Produce all three lenses (supportive, \
+critical, neutral), each with search hints a person would actually type into \
+YouTube to find that side's real footage.
+
+{shape}
 
 JSON only."""
 
@@ -219,3 +252,46 @@ def build_outline(query: str, llm: LLMClient) -> Outline:
     )
     resp = llm.complete(prompt, system=SYSTEM, model=MODEL_SMART, max_tokens=2048)
     return parse_outline(extract_json(resp.text), query)
+
+
+def parse_perspectives_outline(data: dict, query: str) -> Outline:
+    """Validate a perspectives plan. Lenses are stored as groupings so the rest
+    of the pipeline (retrieval, ranking) reuses the entertain path unchanged."""
+    if not isinstance(data, dict):
+        raise LLMError("perspectives outline must be an object")
+    outline = Outline(
+        mode="perspectives",
+        title=str(data.get("title") or query).strip(),
+        query=query,
+        query_norm=normalize_query(query),
+        subject=str(data.get("subject") or query).strip(),
+    )
+    raw = data.get("lenses")
+    if not isinstance(raw, list):
+        raise LLMError("perspectives outline needs a lenses list")
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "")).strip().lower()
+        if label not in LENS_LABELS:
+            continue
+        outline.groupings.append(
+            Grouping(label=label, search_hints=_as_str_list(item.get("search_hints")))
+        )
+    # The guardrail: a perspectives page must be balanced or it does not ship.
+    if len({g.label for g in outline.groupings}) < MIN_LENSES:
+        raise LLMError(
+            f"perspectives page needs >= {MIN_LENSES} lenses; a one-sided "
+            "perspectives page is invalid by design"
+        )
+    if not outline.all_hints():
+        raise LLMError("perspectives outline produced no search hints")
+    return outline
+
+
+def build_perspectives_outline(subject: str, llm: LLMClient) -> Outline:
+    prompt = PERSPECTIVES_PROMPT.format(subject=subject, shape=PERSPECTIVES_SHAPE)
+    resp = llm.complete(
+        prompt, system=PERSPECTIVES_SYSTEM, model=MODEL_SMART, max_tokens=2048
+    )
+    return parse_perspectives_outline(extract_json(resp.text), subject)

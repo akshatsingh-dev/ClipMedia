@@ -22,7 +22,7 @@ from typing import Any, Callable, Sequence
 
 from ..llm.client import LLMClient
 from ..sources.youtube import QuotaExceeded, TranscriptIpBlocked, YouTubeSource
-from .assemble import assemble_entertain, assemble_learn
+from .assemble import assemble_entertain, assemble_learn, assemble_perspectives
 from .credibility import (
     DEFAULT_CREDIBILITY,
     enforce_contested_selection,
@@ -31,7 +31,7 @@ from .credibility import (
 )
 from .embed import Embedder, embed_texts
 from .moments import detect_moments
-from .outline import Outline, build_outline
+from .outline import Outline, build_outline, build_perspectives_outline
 from .rank_entertain import build_feed
 from .rank_learn import Candidate, rank_chapter
 from .score import looks_like_junk, repair_names, score_segments
@@ -96,10 +96,15 @@ def build_page(
 
     # -- stage 1: outline ------------------------------------------------
     progress("outline", "planning the page", 0.0, {})
-    outline = build_outline(query, deps.llm)
-    if mode_hint and mode_hint != outline.mode:
-        log.info("overriding classified mode %s with hint %s", outline.mode, mode_hint)
-        outline.mode = mode_hint
+    # Perspectives is an explicit user choice (mode_hint), never auto-detected —
+    # surprising someone with a multi-lens page would be wrong.
+    if mode_hint == "perspectives":
+        outline = build_perspectives_outline(query, deps.llm)
+    else:
+        outline = build_outline(query, deps.llm)
+        if mode_hint and mode_hint != outline.mode:
+            log.info("overriding classified mode %s with hint %s", outline.mode, mode_hint)
+            outline.mode = mode_hint
     progress(
         "outline",
         f"planned {outline.title}",
@@ -334,6 +339,14 @@ def build_page(
             if picked:
                 ranked[label] = picked
                 used.update((c.video_id, c.t_start) for c in picked)
+    elif outline.mode == "perspectives":
+        # Each lens is ranked independently and kept separate (not interleaved) —
+        # the whole point is to show the sides side by side, not blend them.
+        ranked = {}
+        for label, pool in section_candidates.items():
+            picked = rank_chapter(pool, min_clips=1, max_clips=4, min_channels=1)
+            if picked:
+                ranked[label] = picked
     else:
         feed = build_feed(section_candidates)
         ranked = {}
@@ -360,6 +373,8 @@ def build_page(
     progress("assemble", "writing the page", 0.0, {})
     if outline.mode == "learn":
         page = assemble_learn(outline, ranked, deps.llm)
+    elif outline.mode == "perspectives":
+        page = assemble_perspectives(outline, ranked, deps.llm)
     else:
         page = assemble_entertain(outline, ranked, deps.llm)
 
@@ -388,7 +403,7 @@ def _attach_metadata(page: dict, metas: dict) -> dict:
     Attribution is non-negotiable (C5), so it is attached here rather than
     trusted to the assembly model, which would be free to omit or invent it.
     """
-    sections = page.get("chapters") or page.get("groups") or []
+    sections = page.get("chapters") or page.get("groups") or page.get("lenses") or []
     for section in sections:
         for clip in section.get("clips", []):
             meta = metas.get(clip["video_id"])

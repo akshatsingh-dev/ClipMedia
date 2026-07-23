@@ -651,3 +651,26 @@ monitoring research shows covert control backfires (~4x bypass). The transparent
 version is a real ~$1.5B→~$5B market where no incumbent does moment-level curation
 of real footage — Deep Clip Search's exact engine. Recorded for a future
 decision; no code committed to that direction.
+
+## D53 — Multi-lens perspectives mode (LLM), and real YouTube 429 hardening
+The auto multi-perspective view (research/perspective-streams.md Part 2). An
+explicit `perspectives` mode (never auto-detected): stage 1 plans supportive /
+critical / neutral lenses, retrieval+ranking reuse the existing per-section path,
+and assembly writes one neutral stance per lens. Two hard guardrails in code, so
+a one-sided page cannot ship:
+  - the outline needs >=2 valid lenses or it raises;
+  - the assembler refuses if <2 lenses survive resolution, and each lens's stance
+    is fact-checked against that lens's own clips.
+Frontend `/q/[slug]` renders a lens-tabbed view where all sides are always
+visible, under a neutral "no lens is the platform's view" header.
+
+Proven by 8 tests; a live perspectives build was blocked only by the YouTube
+daily quota (below), not by the feature.
+
+**Real 429 hardening.** The live build hit YouTube's *actual* daily-quota 429
+(HttpError), which crashed the build — the pipeline only handled our predicted
+QuotaLedger exception, not the API's own 429. Now a real quota 429 on search or
+metadata is translated to QuotaExceeded and degrades gracefully (ships the page
+built so far), which is the D6 #1-risk behaviour the ledger was meant to give.
+The YouTube quota is exhausted for today from the day's builds; it resets at
+midnight Pacific.

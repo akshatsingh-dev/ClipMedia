@@ -144,6 +144,14 @@ class GoogleYouTubeClient:
         )
 
 
+
+def _is_quota_error(exc: Exception) -> bool:
+    """Recognise a YouTube API daily-quota 429 across error representations."""
+    text = str(exc).lower()
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    return status == 429 or "quotaexceeded" in text or "quota exceeded" in text or "ratelimitexceeded" in text
+
+
 class YouTubeSource(SourceAdapter):
     source = "youtube"
 
@@ -171,7 +179,16 @@ class YouTubeSource(SourceAdapter):
                 return ids
 
         self.quota.charge(SEARCH_COST_UNITS)
-        resp = self._client.search_list(hint, max_results)
+        try:
+            resp = self._client.search_list(hint, max_results)
+        except Exception as exc:  # noqa: BLE001
+            # The real API can 429 for daily-quota exhaustion before our own
+            # QuotaLedger predicts it (the ledger is an estimate). Translate it
+            # to QuotaExceeded so the build degrades gracefully — ships the page
+            # built so far — instead of crashing on a raw HttpError.
+            if _is_quota_error(exc):
+                raise QuotaExceeded(f"YouTube API quota exhausted: {str(exc)[:120]}") from exc
+            raise
         ids = [
             item["id"]["videoId"]
             for item in resp.get("items", [])
@@ -199,7 +216,12 @@ class YouTubeSource(SourceAdapter):
         for i in range(0, len(video_ids), VIDEOS_LIST_BATCH):
             batch = video_ids[i : i + VIDEOS_LIST_BATCH]
             self.quota.charge(VIDEOS_LIST_COST_UNITS)
-            resp = self._client.videos_list(batch)
+            try:
+                resp = self._client.videos_list(batch)
+            except Exception as exc:  # noqa: BLE001
+                if _is_quota_error(exc):
+                    raise QuotaExceeded(f"YouTube API quota exhausted: {str(exc)[:120]}") from exc
+                raise
             for item in resp.get("items", []):
                 out.append(self._to_meta(item))
         return out
