@@ -69,7 +69,7 @@ export type BuildStart = {
 
 export async function startBuild(
   query: string,
-  mode?: "learn" | "entertain"
+  mode?: "learn" | "entertain" | "perspectives"
 ): Promise<BuildStart> {
   let res: Response;
   try {

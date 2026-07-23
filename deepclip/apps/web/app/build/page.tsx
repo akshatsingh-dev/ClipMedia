@@ -8,7 +8,7 @@ import BuildStream from "@/components/BuildStream";
 function BuildInner() {
   const params = useSearchParams();
   const query = params.get("q") || "";
-  const mode = params.get("mode") as "learn" | "entertain" | null;
+  const mode = params.get("mode") as "learn" | "entertain" | "perspectives" | null;
 
   if (!query) {
     return (

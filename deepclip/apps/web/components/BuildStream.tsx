@@ -34,7 +34,7 @@ export default function BuildStream({
   mode,
 }: {
   query: string;
-  mode?: "learn" | "entertain";
+  mode?: "learn" | "entertain" | "perspectives";
 }) {
   const router = useRouter();
   const [events, setEvents] = useState<StreamEvent[]>([]);

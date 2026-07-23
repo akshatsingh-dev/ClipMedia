@@ -62,7 +62,7 @@ export default async function StreamPage({ params }: { params: { id: string } })
       <div className="mt-8 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-white/55">
         This is a viewpoint someone assembled, not a neutral summary. Want the
         other sides?{" "}
-        <Link href={`/build?q=${encodeURIComponent(stream.title)}`} className="text-accent hover:underline">
+        <Link href={`/build?q=${encodeURIComponent(stream.title)}&mode=perspectives`} className="text-accent hover:underline">
           See multiple perspectives →
         </Link>
       </div>

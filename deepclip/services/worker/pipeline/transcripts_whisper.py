@@ -188,6 +188,9 @@ class WhisperTranscriber:
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
+            # Progress bars are carriage-return spam in a worker log, where they
+            # bury the lines that matter (which client answered, which video).
+            "noprogress": True,
             # A refused fetch is not worth ten retries against the same block;
             # switching client is what actually helps, so fail over fast.
             "retries": 1,

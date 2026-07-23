@@ -11,7 +11,10 @@ import { useState } from "react";
 export default function SearchBox() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<"auto" | "learn" | "entertain">("auto");
+  // "perspectives" is deliberately absent from auto-classification (D53): a
+  // multi-lens page is something a user asks for, never something the platform
+  // decides a topic deserves.
+  const [mode, setMode] = useState<"auto" | "learn" | "entertain" | "perspectives">("auto");
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,7 +45,7 @@ export default function SearchBox() {
       </div>
 
       <div className="mt-3 flex gap-1.5">
-        {(["auto", "learn", "entertain"] as const).map((m) => (
+        {(["auto", "learn", "entertain", "perspectives"] as const).map((m) => (
           <button
             key={m}
             type="button"
@@ -53,7 +56,7 @@ export default function SearchBox() {
                 : "text-white/40 hover:text-white/70"
             }`}
           >
-            {m === "auto" ? "decide for me" : m}
+            {m === "auto" ? "decide for me" : m === "perspectives" ? "all sides" : m}
           </button>
         ))}
       </div>
