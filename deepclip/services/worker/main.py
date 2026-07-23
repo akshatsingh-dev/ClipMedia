@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 
 # A page build is LLM- and network-bound; 10 minutes is generous but a stuck
 # build must not hold a worker slot forever.
-JOB_TIMEOUT_S = 600
+JOB_TIMEOUT_S = int(os.environ.get('JOB_TIMEOUT_S', '1800'))  # Whisper builds are slow; 30min ceiling
 
 
 class PostgresHintCache:
