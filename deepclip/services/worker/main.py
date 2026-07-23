@@ -176,15 +176,23 @@ def _redis_settings():
     return RedisSettings.from_dsn(os.environ.get("REDIS_URL", "redis://localhost:6379"))
 
 
-# arq resolves jobs by function __name__, and the API enqueues "build_page" /
-# "import_seed". Renaming here keeps the job names stable regardless of what the
-# Python functions are called.
-build_page_job.__name__ = "build_page"
-import_seed_job.__name__ = "import_seed"
+def _worker_functions():
+    """Register jobs under the exact names the API enqueues.
+
+    arq keys jobs by name; reassigning `__name__` did not take (arq captured the
+    original function name), so `arq.func(..., name=...)` sets it explicitly. The
+    API enqueues "build_page" / "import_seed".
+    """
+    from arq import func
+
+    return [
+        func(build_page_job, name="build_page"),
+        func(import_seed_job, name="import_seed"),
+    ]
 
 
 class WorkerSettings:
-    functions = [build_page_job, import_seed_job]
+    functions = _worker_functions()
     on_startup = startup
     on_shutdown = shutdown
     job_timeout = JOB_TIMEOUT_S
