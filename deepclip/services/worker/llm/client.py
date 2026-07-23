@@ -176,8 +176,16 @@ class GeminiClient:
         if not key:
             raise RuntimeError("GEMINI_API_KEY is not set")
         from google import genai  # imported lazily so the package is optional
+        from google.genai import types as genai_types
 
-        self._client = genai.Client(api_key=key)
+        # A per-request timeout so a build fails fast when the quota is exhausted
+        # instead of hanging on the SDK's internal retry — which is exactly what
+        # froze a build when the Gemini free-tier tokens ran out.
+        timeout_ms = int(os.environ.get("GEMINI_TIMEOUT_MS", "60000"))
+        self._client = genai.Client(
+            api_key=key,
+            http_options=genai_types.HttpOptions(timeout=timeout_ms),
+        )
 
     def _map_model(self, model: str) -> str:
         if model == MODEL_FAST:

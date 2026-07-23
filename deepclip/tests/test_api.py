@@ -527,3 +527,37 @@ def test_tutor_validates_question(client):
     client.app.state.repo = TutorFakeRepo(TUTOR_PAGE)
     r = client.post("/api/tutor", json={"slug": "g", "video_id": "v1", "t_start": 100, "question": ""})
     assert r.status_code == 422
+
+
+# -- saved pages --------------------------------------------------------
+
+
+class SavedFakeRepo(FakeRepo):
+    def __init__(self):
+        super().__init__()
+        self.store = {}
+    async def save_page_for_user(self, anon_id, slug, mode, title):
+        self.store.setdefault(anon_id, {})[slug] = {"slug": slug, "mode": mode, "title": title, "saved_at": None}
+    async def unsave_page_for_user(self, anon_id, slug):
+        return self.store.get(anon_id, {}).pop(slug, None) is not None
+    async def list_saved_pages(self, anon_id, limit=100):
+        return list(self.store.get(anon_id, {}).values())
+
+
+def test_save_and_list_flow(client):
+    client.app.state.repo = SavedFakeRepo()
+    assert client.post("/api/saved", json={"anon_id": "a", "slug": "gandhi", "mode": "learn", "title": "G"}).status_code == 201
+    body = client.get("/api/saved", params={"anon_id": "a"}).json()
+    assert body["saved"][0]["slug"] == "gandhi"
+
+
+def test_unsave_flow(client):
+    repo = SavedFakeRepo(); client.app.state.repo = repo
+    client.post("/api/saved", json={"anon_id": "a", "slug": "gandhi"})
+    r = client.request("DELETE", "/api/saved", params={"anon_id": "a", "slug": "gandhi"})
+    assert r.json()["removed"] is True
+
+
+def test_saved_requires_anon_id(client):
+    client.app.state.repo = SavedFakeRepo()
+    assert client.get("/api/saved").status_code == 422

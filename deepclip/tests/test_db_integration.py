@@ -39,7 +39,7 @@ async def repo():
     r = await Repo.connect(DSN)
     await r.init_schema()
     async with r.pool.acquire() as conn:
-        await conn.execute("TRUNCATE segments, videos, deep_pages, learning_paths, hint_cache, events CASCADE")
+        await conn.execute("TRUNCATE segments, videos, deep_pages, learning_paths, hint_cache, events, saved_pages CASCADE")
     yield r
     await r.close()
 
@@ -352,3 +352,42 @@ async def test_recent_reports_ranks_by_count(repo):
 
 async def test_recent_reports_empty(repo):
     assert await repo.recent_reports() == []
+
+
+# -- saved pages (D3) ---------------------------------------------------
+
+
+async def test_save_and_list_page(repo):
+    await repo.save_page_for_user("anon1", "gandhi", "learn", "Gandhi")
+    saved = await repo.list_saved_pages("anon1")
+    assert len(saved) == 1
+    assert saved[0]["slug"] == "gandhi"
+    assert saved[0]["title"] == "Gandhi"
+
+
+async def test_save_is_idempotent(repo):
+    await repo.save_page_for_user("anon1", "gandhi", "learn", "Gandhi")
+    await repo.save_page_for_user("anon1", "gandhi", "learn", "Gandhi Updated")
+    saved = await repo.list_saved_pages("anon1")
+    assert len(saved) == 1, "re-saving must not duplicate"
+    assert saved[0]["title"] == "Gandhi Updated"
+
+
+async def test_unsave(repo):
+    await repo.save_page_for_user("anon1", "gandhi", "learn", "G")
+    assert await repo.unsave_page_for_user("anon1", "gandhi") is True
+    assert await repo.list_saved_pages("anon1") == []
+    assert await repo.unsave_page_for_user("anon1", "gandhi") is False
+
+
+async def test_saved_isolated_per_user(repo):
+    await repo.save_page_for_user("anon1", "gandhi", "learn", "G")
+    await repo.save_page_for_user("anon2", "mlk", "learn", "M")
+    assert [s["slug"] for s in await repo.list_saved_pages("anon1")] == ["gandhi"]
+    assert [s["slug"] for s in await repo.list_saved_pages("anon2")] == ["mlk"]
+
+
+async def test_is_saved(repo):
+    assert await repo.is_saved("anon1", "gandhi") is False
+    await repo.save_page_for_user("anon1", "gandhi", "learn", "G")
+    assert await repo.is_saved("anon1", "gandhi") is True

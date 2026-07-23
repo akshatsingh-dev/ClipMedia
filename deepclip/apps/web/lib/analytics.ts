@@ -1,4 +1,5 @@
 import { API_BASE } from "./api";
+import { getAnonId, uuid } from "./anon";
 
 /**
  * Client analytics beacon (master doc D4/D8).
@@ -37,33 +38,8 @@ type Event = {
   meta?: Record<string, unknown>;
 };
 
-const ANON_KEY = "dcs_anon_id";
 const FLUSH_MS = 4000;
 const MAX_BUFFER = 20;
-
-function uuid(): string {
-  try {
-    if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
-  } catch {
-    /* fall through */
-  }
-  return `x-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-function anonId(): string {
-  if (typeof window === "undefined") return "ssr";
-  try {
-    let id = localStorage.getItem(ANON_KEY);
-    if (!id) {
-      id = uuid();
-      localStorage.setItem(ANON_KEY, id);
-    }
-    return id;
-  } catch {
-    // Private mode / storage disabled: still measurable within the session.
-    return "no-storage";
-  }
-}
 
 // One session id per tab load. Module-scoped so every event in a page view
 // shares it, which is what makes completion-per-session meaningful.
@@ -107,7 +83,7 @@ export function track(
 ): void {
   if (typeof window === "undefined") return;
   try {
-    buffer.push({ anon_id: anonId(), session_id: SESSION_ID, kind, ...fields });
+    buffer.push({ anon_id: getAnonId(), session_id: SESSION_ID, kind, ...fields });
     if (buffer.length >= MAX_BUFFER) {
       flush();
       return;

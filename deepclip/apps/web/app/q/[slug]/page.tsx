@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import ChapterSection from "@/components/ChapterSection";
 import UnverifiedBanner from "@/components/UnverifiedBanner";
+import SaveButton from "@/components/SaveButton";
 import {
   PageCompleteSentinel,
   PageViewTracker,
@@ -39,6 +40,9 @@ export default async function LearnPage({ params }: { params: { slug: string } }
         <p className="mt-4 text-xs text-white/35">
           {page.chapters.length} chapters · {totalClips} clips · ends at the bottom
         </p>
+        <div className="mt-4">
+          <SaveButton slug={page.slug} mode="learn" title={page.title} />
+        </div>
       </header>
 
       {!page.timestamps_verified && <UnverifiedBanner note={page.source_note} />}

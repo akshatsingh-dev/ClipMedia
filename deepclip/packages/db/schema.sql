@@ -81,3 +81,16 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_slug_idx ON events (slug, created_at);
 CREATE INDEX IF NOT EXISTS events_kind_idx ON events (kind, created_at);
 CREATE INDEX IF NOT EXISTS events_anon_idx ON events (anon_id, created_at);
+
+-- Saved pages (master doc D3, Pro tier). Keyed by anon_id (localStorage UUID),
+-- so saving works with no login -- accounts can attach to an anon_id later
+-- without migrating data. A user cannot save the same page twice (PK).
+CREATE TABLE IF NOT EXISTS saved_pages (
+  anon_id   TEXT NOT NULL,
+  slug      TEXT NOT NULL,
+  mode      TEXT,
+  title     TEXT,
+  saved_at  TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (anon_id, slug)
+);
+CREATE INDEX IF NOT EXISTS saved_pages_anon_idx ON saved_pages (anon_id, saved_at DESC);

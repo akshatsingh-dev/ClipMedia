@@ -580,6 +580,59 @@ class Repo:
             for r in rows
         ]
 
+    # -- saved pages (D3, Pro tier) --------------------------------------
+
+    async def save_page_for_user(
+        self, anon_id: str, slug: str, mode: str | None, title: str | None
+    ) -> None:
+        """Idempotent save. Re-saving the same page is a no-op, not a duplicate."""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO saved_pages (anon_id, slug, mode, title)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (anon_id, slug) DO UPDATE
+                  SET mode = EXCLUDED.mode, title = EXCLUDED.title
+                """,
+                anon_id, slug, mode, title,
+            )
+
+    async def unsave_page_for_user(self, anon_id: str, slug: str) -> bool:
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM saved_pages WHERE anon_id = $1 AND slug = $2",
+                anon_id, slug,
+            )
+        return result.endswith("1")
+
+    async def list_saved_pages(self, anon_id: str, limit: int = 100) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT slug, mode, title, saved_at
+                FROM saved_pages WHERE anon_id = $1
+                ORDER BY saved_at DESC LIMIT $2
+                """,
+                anon_id, limit,
+            )
+        return [
+            {
+                "slug": r["slug"],
+                "mode": r["mode"],
+                "title": r["title"],
+                "saved_at": r["saved_at"].isoformat() if r["saved_at"] else None,
+            }
+            for r in rows
+        ]
+
+    async def is_saved(self, anon_id: str, slug: str) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT 1 FROM saved_pages WHERE anon_id = $1 AND slug = $2",
+                anon_id, slug,
+            )
+        return row is not None
+
     async def satisfaction(self, slug: str) -> dict:
         """The one-tap 'got what I came for' signal (D4)."""
         async with self.pool.acquire() as conn:

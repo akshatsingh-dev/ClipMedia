@@ -602,3 +602,16 @@ the chain implemented. Captions return once the IP block lifts.
 This is the seventh time this session that running for real changed the outcome,
 and the most consequential: it turns "live builds are blocked" into "live builds
 work, slowly, today."
+
+## D49 — Saved pages (D3), keyed by anon_id (no login needed)
+Saving works off the anonymous localStorage id shared with analytics, so a user
+can save pages with no account — and an account can adopt that anon_id later
+without migrating data. Idempotent (PK on anon_id+slug), optimistic in the UI.
+Full email/password auth is deliberately deferred: it means credential handling,
+and the anon-id approach delivers the actual D3 value (saved paths) now without it.
+
+## D50 — Gemini fails fast on quota exhaustion
+A build froze at the assembly stage when the free-tier Gemini tokens ran out —
+the SDK hung on internal retries. Added a per-request timeout
+(`GEMINI_TIMEOUT_MS`, default 60s) so a quota-exhausted build fails cleanly into
+the existing degradation paths instead of hanging a worker slot.

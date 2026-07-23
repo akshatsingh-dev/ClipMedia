@@ -344,6 +344,32 @@ async def get_reports(request: Request, limit: int = 100):
     return {"reports": await repo.recent_reports(limit=min(max(limit, 1), 500))}
 
 
+class SaveRequest(BaseModel):
+    anon_id: str = Field(min_length=1, max_length=64)
+    slug: str = Field(min_length=1, max_length=300)
+    mode: str | None = Field(default=None, max_length=16)
+    title: str | None = Field(default=None, max_length=300)
+
+
+@app.post("/api/saved", status_code=201)
+async def save_page(req: SaveRequest, request: Request):
+    """Save a page for a user (D3). Keyed by anon_id, so no login required."""
+    await _repo(request).save_page_for_user(req.anon_id, req.slug, req.mode, req.title)
+    return {"saved": True, "slug": req.slug}
+
+
+@app.delete("/api/saved")
+async def unsave_page(request: Request, anon_id: str, slug: str):
+    removed = await _repo(request).unsave_page_for_user(anon_id, slug)
+    return {"removed": removed, "slug": slug}
+
+
+@app.get("/api/saved")
+async def list_saved(request: Request, anon_id: str, limit: int = 100):
+    rows = await _repo(request).list_saved_pages(anon_id, limit=min(max(limit, 1), 200))
+    return {"saved": rows}
+
+
 class TutorRequest(BaseModel):
     slug: str = Field(min_length=1, max_length=300)
     video_id: str = Field(min_length=1, max_length=32)
