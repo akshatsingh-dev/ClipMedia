@@ -5,7 +5,11 @@ import pytest
 
 from scripts.prebuild import RunStats, load_queries, prebuild
 from services.worker.pipeline.transcripts_whisper import (
+    PLAYER_CLIENT_CHAIN,
+    AudioForbidden,
     WhisperTranscriber,
+    _is_refusal,
+    audio_proxy_url,
     estimate_cost_usd,
     fetch_with_whisper_fallback,
     whisper_enabled,
@@ -43,6 +47,156 @@ def test_cost_estimate():
     assert estimate_cost_usd(600) == pytest.approx(0.06)
     assert estimate_cost_usd(0) == 0.0
     assert estimate_cost_usd(-100) == 0.0
+
+
+# -- audio endpoint blocks (D57) ----------------------------------------
+
+
+PROXY_ENV = (
+    "DEEPCLIP_YTDLP_PROXY",
+    "WEBSHARE_PROXY_USER",
+    "WEBSHARE_PROXY_PASS",
+    "WEBSHARE_PROXY_HOST",
+    "YTT_PROXY_HTTP",
+    "YTT_PROXY_HTTPS",
+    "YTDLP_COOKIES_FILE",
+)
+
+
+@pytest.fixture
+def no_proxy_env(monkeypatch):
+    for key in PROXY_ENV:
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_no_proxy_configured_means_direct(no_proxy_env):
+    assert audio_proxy_url() is None
+
+
+def test_webshare_credentials_build_a_proxy_url(no_proxy_env, monkeypatch):
+    """The audio path reads the same env as the caption path.
+
+    Configuring one and not the other is what left audio exposed when captions
+    were already protected.
+    """
+    monkeypatch.setenv("WEBSHARE_PROXY_USER", "u")
+    monkeypatch.setenv("WEBSHARE_PROXY_PASS", "p")
+    assert audio_proxy_url() == "http://u:p@p.webshare.io:80"
+
+
+def test_generic_proxy_env_is_used(no_proxy_env, monkeypatch):
+    monkeypatch.setenv("YTT_PROXY_HTTPS", "http://box:8080")
+    assert audio_proxy_url() == "http://box:8080"
+
+
+def test_explicit_proxy_wins(no_proxy_env, monkeypatch):
+    monkeypatch.setenv("YTT_PROXY_HTTPS", "http://box:8080")
+    monkeypatch.setenv("DEEPCLIP_YTDLP_PROXY", "http://explicit:1")
+    assert audio_proxy_url() == "http://explicit:1"
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["HTTP Error 403: Forbidden", "Sign in to confirm you're not a bot"],
+)
+def test_blocks_are_recognised_as_refusals(message):
+    assert _is_refusal(Exception(message)) is True
+
+
+@pytest.mark.parametrize("message", ["Private video", "Video unavailable", "boom"])
+def test_broken_videos_are_not_refusals(message):
+    """A dead video must propagate, not burn the whole client chain."""
+    assert _is_refusal(Exception(message)) is False
+
+
+class FakeYdl:
+    """Minimal yt-dlp stand-in whose behaviour depends on the player client."""
+
+    def __init__(self, opts, *, refuse, workdir, calls):
+        self.client = opts["extractor_args"]["youtube"]["player_client"][0]
+        self.opts = opts
+        self._refuse = refuse
+        self._workdir = workdir
+        self._calls = calls
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def extract_info(self, url, download=False):
+        self._calls.append(self.client)
+        if self.client in self._refuse:
+            raise Exception("HTTP Error 403: Forbidden")
+        return {"duration": 120, "id": "vid"}
+
+    def download(self, urls):
+        Path(self._workdir, "vid.m4a").write_bytes(b"audio")
+
+
+def install_fake_ytdlp(monkeypatch, tmp_path, refuse):
+    import sys
+    import types
+
+    calls: list[str] = []
+    module = types.ModuleType("yt_dlp")
+    module.YoutubeDL = lambda opts: FakeYdl(
+        opts, refuse=refuse, workdir=tmp_path, calls=calls
+    )
+    monkeypatch.setitem(sys.modules, "yt_dlp", module)
+    return calls
+
+
+def test_download_falls_over_to_the_next_player_client(
+    whisper_on, no_proxy_env, monkeypatch, tmp_path
+):
+    """A 403 on one client is routinely served fine by another."""
+    calls = install_fake_ytdlp(monkeypatch, tmp_path, refuse={"android"})
+    path = WhisperTranscriber._download_audio("vid", str(tmp_path), 3600)
+    assert path is not None and path.endswith("vid.m4a")
+    assert calls == ["android", "ios"]
+
+
+def test_all_clients_refused_raises_audio_forbidden(
+    whisper_on, no_proxy_env, monkeypatch, tmp_path
+):
+    calls = install_fake_ytdlp(monkeypatch, tmp_path, refuse=set(PLAYER_CLIENT_CHAIN))
+    with pytest.raises(AudioForbidden) as exc:
+        WhisperTranscriber._download_audio("vid", str(tmp_path), 3600)
+    assert calls == list(PLAYER_CLIENT_CHAIN)
+    assert "proxy" in str(exc.value).lower()
+
+
+def test_audio_forbidden_propagates_out_of_transcribe(
+    whisper_on, no_proxy_env, monkeypatch, tmp_path
+):
+    """It must not be swallowed as 'no transcript' — that hides the real cause."""
+    install_fake_ytdlp(monkeypatch, tmp_path, refuse=set(PLAYER_CLIENT_CHAIN))
+    with pytest.raises(AudioForbidden):
+        WhisperTranscriber().transcribe("vid")
+
+
+def test_proxy_and_cookies_reach_ytdlp(whisper_on, no_proxy_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("DEEPCLIP_YTDLP_PROXY", "http://proxy:9")
+    monkeypatch.setenv("YTDLP_COOKIES_FILE", "/tmp/cookies.txt")
+    seen = {}
+
+    import sys
+    import types
+
+    module = types.ModuleType("yt_dlp")
+
+    def factory(opts):
+        seen.update(opts)
+        return FakeYdl(opts, refuse=set(), workdir=tmp_path, calls=[])
+
+    module.YoutubeDL = factory
+    monkeypatch.setitem(sys.modules, "yt_dlp", module)
+
+    WhisperTranscriber._download_audio("vid", str(tmp_path), 3600)
+    assert seen["proxy"] == "http://proxy:9"
+    assert seen["cookiefile"] == "/tmp/cookies.txt"
 
 
 # -- fallback chain -----------------------------------------------------

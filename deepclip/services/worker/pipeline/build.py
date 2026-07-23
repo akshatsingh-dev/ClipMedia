@@ -22,6 +22,7 @@ from typing import Any, Callable, Sequence
 
 from ..llm.client import LLMClient
 from ..sources.youtube import QuotaExceeded, TranscriptIpBlocked, YouTubeSource
+from .transcripts_whisper import AudioForbidden
 from .assemble import assemble_entertain, assemble_learn, assemble_perspectives
 from .credibility import (
     DEFAULT_CREDIBILITY,
@@ -165,14 +166,18 @@ def build_page(
     for i, vid in enumerate(all_ids):
         try:
             t = deps.youtube.fetch_transcript(vid)
-        except TranscriptIpBlocked as exc:
+        except (TranscriptIpBlocked, AudioForbidden) as exc:
             # Affects every video, so stop rather than grinding through all of
             # them. Keep whatever was fetched before the block; the build may
-            # still succeed on a partial corpus.
+            # still succeed on a partial corpus. AudioForbidden means even the
+            # Whisper escape hatch is blocked from this IP, so there is no
+            # remaining path to a transcript without a proxy.
             log.warning("transcript endpoint IP-blocked: %s", exc)
+            which = "audio" if isinstance(exc, AudioForbidden) else "caption"
             warnings.append(
-                "YouTube IP-blocked the transcript endpoint mid-build — set a "
-                "proxy (YTT_PROXY_* / WEBSHARE_PROXY_*) or retry later"
+                f"YouTube IP-blocked the {which} endpoint mid-build — set a "
+                "proxy (YTT_PROXY_* / WEBSHARE_PROXY_* / DEEPCLIP_YTDLP_PROXY) "
+                "or retry later"
             )
             break
         except Exception as exc:  # noqa: BLE001 - one video must not lose a page

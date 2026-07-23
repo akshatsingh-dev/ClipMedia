@@ -31,6 +31,40 @@ log = logging.getLogger(__name__)
 DEFAULT_MODEL = os.environ.get("WHISPER_MODEL", "base")
 MAX_DURATION_S = 3600  # a 3-hour stream is not worth transcribing at $0.006/min
 
+# Player clients to try, in order, when a download is refused. YouTube serves the
+# same audio through several client APIs and blocks them independently — a 403 on
+# the default web client is routinely served fine to the android/ios ones. Trying
+# them in order is what turns "this IP is blocked" into "this IP is blocked on one
+# client", which is the difference between a dead pipeline and a slow one.
+PLAYER_CLIENT_CHAIN = ("android", "ios", "web_safari", "web")
+
+
+class AudioForbidden(RuntimeError):
+    """Every client was refused (HTTP 403 / bot check) for this IP.
+
+    Distinct from "this video has no audio stream": like TranscriptIpBlocked it is
+    an infra condition affecting every video, and the fix is a proxy or cookies,
+    not a retry.
+    """
+
+
+def audio_proxy_url() -> str | None:
+    """The proxy yt-dlp should use, from the same env the caption path reads.
+
+    Both transcript paths get blocked by the same thing (this IP), so they take
+    their proxy from the same place — configuring one and not the other is the
+    trap that left the audio path exposed when captions were already protected.
+    """
+    explicit = os.environ.get("DEEPCLIP_YTDLP_PROXY")
+    if explicit:
+        return explicit
+    user = os.environ.get("WEBSHARE_PROXY_USER")
+    pw = os.environ.get("WEBSHARE_PROXY_PASS")
+    if user and pw:
+        host = os.environ.get("WEBSHARE_PROXY_HOST", "p.webshare.io:80")
+        return f"http://{user}:{pw}@{host}"
+    return os.environ.get("YTT_PROXY_HTTPS") or os.environ.get("YTT_PROXY_HTTP") or None
+
 
 def whisper_enabled() -> bool:
     return os.environ.get("DEEPCLIP_WHISPER", "").lower() in {"1", "true", "yes"}
@@ -42,6 +76,29 @@ class WhisperUnavailable(RuntimeError):
 
 def estimate_cost_usd(duration_s: int, rate_per_min: float = 0.006) -> float:
     return max(duration_s, 0) / 60.0 * rate_per_min
+
+
+_REFUSAL_MARKERS = (
+    "http error 403",
+    "forbidden",
+    "sign in to confirm",
+    "not a bot",
+    "unable to download api page",
+    "failed to extract any player response",
+    "requested format is not available",
+)
+
+
+def _is_refusal(exc: Exception) -> bool:
+    """Is this yt-dlp failure a block, rather than a broken video?
+
+    A block is worth retrying on another client; a private/deleted video is not,
+    so it must propagate instead of burning the whole chain on every video.
+    """
+    msg = str(exc).lower()
+    if any(m in msg for m in ("private video", "video unavailable", "removed by the uploader")):
+        return False
+    return any(m in msg for m in _REFUSAL_MARKERS)
 
 
 class WhisperTranscriber:
@@ -87,7 +144,11 @@ class WhisperTranscriber:
             if audio_path is None:
                 return None
             return self._transcribe_file(audio_path, video_id)
-        except WhisperUnavailable:
+        except (WhisperUnavailable, AudioForbidden):
+            # A blocked audio endpoint affects every video, so it must reach the
+            # caller as itself — swallowing it as None reports "no transcript
+            # anywhere", the same misleading message TranscriptIpBlocked exists
+            # to prevent.
             raise
         except Exception as exc:  # noqa: BLE001
             log.warning("whisper failed for %s: %s", video_id, exc)
@@ -116,32 +177,61 @@ class WhisperTranscriber:
         except ImportError as exc:  # pragma: no cover
             raise WhisperUnavailable("yt-dlp is not installed") from exc
 
+        url = f"https://www.youtube.com/watch?v={video_id}"
         out = os.path.join(workdir, "%(id)s.%(ext)s")
-        opts = {
+        proxy = audio_proxy_url()
+        cookies = os.environ.get("YTDLP_COOKIES_FILE")
+        base = {
             # worstaudio keeps the file small; Whisper does not need fidelity.
             "format": "worstaudio/bestaudio/best",
             "outtmpl": out,
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
+            # A refused fetch is not worth ten retries against the same block;
+            # switching client is what actually helps, so fail over fast.
+            "retries": 1,
+            "fragment_retries": 1,
         }
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(
-                f"https://www.youtube.com/watch?v={video_id}", download=False
-            )
-            duration = int(info.get("duration") or 0)
-            if duration > max_duration_s:
-                log.info(
-                    "skipping whisper for %s: %ds exceeds %ds cap (~$%.2f)",
-                    video_id, duration, max_duration_s, estimate_cost_usd(duration),
-                )
-                return None
-            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+        if proxy:
+            base["proxy"] = proxy
+        if cookies:
+            base["cookiefile"] = cookies
 
-        for path in Path(workdir).iterdir():
-            if path.suffix.lower() in {".m4a", ".webm", ".opus", ".mp3", ".mp4", ".ogg"}:
-                return str(path)
-        return None
+        refusals = []
+        for client in PLAYER_CLIENT_CHAIN:
+            opts = dict(base, extractor_args={"youtube": {"player_client": [client]}})
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    duration = int(info.get("duration") or 0)
+                    if duration > max_duration_s:
+                        log.info(
+                            "skipping whisper for %s: %ds exceeds %ds cap (~$%.2f)",
+                            video_id, duration, max_duration_s,
+                            estimate_cost_usd(duration),
+                        )
+                        return None
+                    ydl.download([url])
+            except Exception as exc:  # noqa: BLE001 - yt-dlp raises many types
+                if not _is_refusal(exc):
+                    raise
+                refusals.append(f"{client}: {exc}")
+                log.info("audio fetch refused for %s via %s client", video_id, client)
+                continue
+
+            for path in Path(workdir).iterdir():
+                if path.suffix.lower() in {".m4a", ".webm", ".opus", ".mp3", ".mp4", ".ogg"}:
+                    return str(path)
+            # Downloaded nothing but was not refused: nothing more to try.
+            return None
+
+        raise AudioForbidden(
+            "every yt-dlp player client was refused for "
+            f"{video_id} ({'; '.join(refusals)}). This IP is blocked on the audio "
+            "endpoint too — set DEEPCLIP_YTDLP_PROXY / WEBSHARE_PROXY_USER+PASS "
+            "(residential proxy) or YTDLP_COOKIES_FILE to route around it."
+        )
 
     def _transcribe_file(self, audio_path: str, video_id: str) -> Transcript:
         model = self._load()

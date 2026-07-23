@@ -8,7 +8,9 @@ from services.worker.sources.youtube import (
     InMemoryHintCache,
     QuotaExceeded,
     QuotaLedger,
+    TranscriptIpBlocked,
     YouTubeSource,
+    YouTubeTranscriptFetcher,
     classify_source,
     parse_iso8601_duration,
 )
@@ -177,3 +179,83 @@ def test_instagram_search_is_refused():
 )
 def test_parse_shortcode(url, expected):
     assert parse_shortcode(url) == expected
+
+
+# -- transcript IP blocks ----------------------------------------------
+
+
+class IpBlocked(Exception):
+    """Stands in for youtube_transcript_api's exception, matched by class name."""
+
+
+class FakeTrack:
+    def __init__(self, exc=None, cues=None):
+        self.language_code = "en"
+        self._exc = exc
+        self._cues = cues or [{"start": 0.0, "duration": 2.0, "text": "hello"}]
+
+    def fetch(self):
+        if self._exc:
+            raise self._exc
+        return self._cues
+
+
+class FakeListing:
+    def __init__(self, manual=None, generated=None):
+        self._manual = manual
+        self._generated = generated
+
+    def find_manually_created_transcript(self, langs):
+        if self._manual is None:
+            raise Exception("no manual track")
+        return self._manual
+
+    def find_generated_transcript(self, langs):
+        if self._generated is None:
+            raise Exception("no generated track")
+        return self._generated
+
+
+def fetcher_with(listing_or_exc):
+    f = YouTubeTranscriptFetcher()
+
+    def _listing(video_id):
+        if isinstance(listing_or_exc, Exception):
+            raise listing_or_exc
+        return listing_or_exc
+
+    f._listing = _listing
+    return f
+
+
+def test_listing_level_ip_block_is_raised():
+    with pytest.raises(TranscriptIpBlocked):
+        fetcher_with(IpBlocked("YouTube is blocking requests from your IP")).fetch("v")
+
+
+def test_content_level_ip_block_is_raised():
+    """The listing can succeed while the caption *content* fetch is blocked.
+
+    Swallowing that reports 'no captions' for a video whose captions exist —
+    the misdiagnosis that hid a live block.
+    """
+    listing = FakeListing(manual=FakeTrack(exc=IpBlocked("blocking requests from your IP")))
+    with pytest.raises(TranscriptIpBlocked):
+        fetcher_with(listing).fetch("v")
+
+
+def test_generated_track_block_is_also_raised():
+    listing = FakeListing(generated=FakeTrack(exc=IpBlocked("blocking requests from your IP")))
+    with pytest.raises(TranscriptIpBlocked):
+        fetcher_with(listing).fetch("v")
+
+
+def test_genuinely_missing_captions_return_none():
+    """A video with no tracks is not a block and must not stop the build."""
+    assert fetcher_with(FakeListing()).fetch("v") is None
+
+
+def test_manual_track_wins_over_generated():
+    listing = FakeListing(manual=FakeTrack(), generated=FakeTrack())
+    t = fetcher_with(listing).fetch("v")
+    assert t is not None and t.kind == "manual" and t.cues[0].text == "hello"

@@ -369,6 +369,13 @@ class YouTubeTranscriptFetcher:
             )
         return cues
 
+    @staticmethod
+    def _is_ip_block(exc: Exception) -> bool:
+        return (
+            type(exc).__name__ in {"IpBlocked", "RequestBlocked"}
+            or "blocking requests from your IP" in str(exc)
+        )
+
     def fetch(self, video_id: str) -> Transcript | None:
         try:
             listing = self._listing(video_id)
@@ -379,7 +386,7 @@ class YouTubeTranscriptFetcher:
             # An IP block affects every request, so it must not be swallowed as
             # "this one video has no captions" — raise it so the build reports
             # the real cause and can stop early instead of failing on all videos.
-            if type(exc).__name__ in {"IpBlocked", "RequestBlocked"} or "blocking requests from your IP" in str(exc):
+            if self._is_ip_block(exc):
                 raise TranscriptIpBlocked(str(exc)[:200]) from exc
             log.info("no transcript listing for %s: %s", video_id, exc)
             return None
@@ -395,7 +402,14 @@ class YouTubeTranscriptFetcher:
             try:
                 track = finder(langs)
                 raw = track.fetch()
-            except Exception:
+            except Exception as exc:
+                # The listing call can succeed while the *content* fetch is
+                # IP-blocked — different request, same block. Swallowing it here
+                # reported "no captions" for a video whose captions plainly
+                # exist, which is the exact misdiagnosis the listing branch
+                # above guards against.
+                if self._is_ip_block(exc):
+                    raise TranscriptIpBlocked(str(exc)[:200]) from exc
                 continue
             return Transcript(
                 video_id=video_id,

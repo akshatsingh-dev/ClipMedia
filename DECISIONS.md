@@ -741,3 +741,42 @@ render only for the owner, and every mutation is owner-checked server-side
 regardless. A dedicated /streams/{id}/edit page reorders (up/down), removes clips
 (gap closed), and deletes the stream. Verified live: owner/stranger detection,
 reorder, remove, and a non-owner edit correctly rejected with 400.
+
+## D58 — The audio block was a client block; the caption block was being hidden
+Two fixes to the transcript layer, both found by probing the live endpoints
+instead of trusting the previous session's diagnosis (D57).
+
+**1. yt-dlp player-client failover (the unblock).** D57 concluded the audio host
+was IP-blocked too (403 on every download), leaving no transcript path at all.
+That was over-broad: YouTube blocks each *player client* independently, and the
+default web client was the blocked one. Walking `android → ios → web_safari →
+web` and taking the first that answers restores audio downloads from this same
+IP — verified live, Whisper is transcribing again. The audio path also now reads
+the same proxy env as the caption path (`DEEPCLIP_YTDLP_PROXY`,
+`WEBSHARE_PROXY_USER/PASS`, `YTT_PROXY_*`) plus `YTDLP_COOKIES_FILE`; protecting
+one path and not the other was what left audio exposed. When every client is
+refused it raises `AudioForbidden` — a distinct error handled like
+`TranscriptIpBlocked` in the build, so "the IP is blocked" never again reports as
+"this video has no captions".
+
+**2. A real IP block was being swallowed as 'no captions'.** `fetch()` guarded
+the *listing* call against `IpBlocked` but wrapped the caption *content* fetch in
+a bare `except Exception: continue`. Live, the listing succeeds and the content
+fetch is blocked — so every video looked caption-free. That is exactly the
+misdiagnosis the listing guard exists to prevent, and it hid the block for a full
+session. Both call sites now raise `TranscriptIpBlocked`; a genuinely
+caption-free video still returns `None`, so a single bad video cannot stop a
+build. Five tests cover the distinction.
+
+**3. `scripts/doctor.py` — one command that says what is broken.** Every stall in
+this project has been an external condition (YouTube daily quota, caption block,
+audio 403, Gemini free-tier ceiling), each surfacing as a different error deep
+inside a build. `python3 -m scripts.doctor` probes keys, Postgres, Redis, API,
+web, the YouTube quota (1 unit, not the 100 a search costs), both transcript
+paths, the Whisper runtime and the LLM, then prints the verdict: either "live
+builds work" or what is blocked plus what is still buildable without quota or
+tokens. Exit code 0/1 so it can gate a prebuild run.
+
+Current live state after the fixes: YouTube quota available, captions still
+IP-blocked, **audio working**, Gemini reachable — so live Whisper builds run
+today, which the previous session had concluded was impossible.
