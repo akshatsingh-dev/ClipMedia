@@ -690,6 +690,69 @@ class Repo:
             )
         return result.endswith("1")
 
+    async def remove_stream_clip(
+        self, stream_id: str, anon_id: str, position: int
+    ) -> bool:
+        """Remove a clip and close the gap, owner-only. Positions stay contiguous
+        so reorder/insert logic downstream never hits a hole."""
+        async with self.pool.acquire() as conn:
+            owner = await conn.fetchval(
+                "SELECT anon_id FROM streams WHERE id = $1::uuid", stream_id
+            )
+            if owner != anon_id:
+                return False
+            async with conn.transaction():
+                deleted = await conn.execute(
+                    "DELETE FROM stream_clips WHERE stream_id = $1::uuid AND position = $2",
+                    stream_id, position,
+                )
+                if not deleted.endswith("1"):
+                    return False
+                # Shift everything after the removed position down by one.
+                await conn.execute(
+                    "UPDATE stream_clips SET position = position - 1 "
+                    "WHERE stream_id = $1::uuid AND position > $2",
+                    stream_id, position,
+                )
+        return True
+
+    async def reorder_stream(
+        self, stream_id: str, anon_id: str, order: list[int]
+    ) -> bool:
+        """Set a new clip order, owner-only. `order` is the current positions in
+        their desired new sequence. Rewrites positions in one transaction so a
+        share view never sees a half-reordered stream."""
+        async with self.pool.acquire() as conn:
+            owner = await conn.fetchval(
+                "SELECT anon_id FROM streams WHERE id = $1::uuid", stream_id
+            )
+            if owner != anon_id:
+                return False
+            rows = await conn.fetch(
+                "SELECT position FROM stream_clips WHERE stream_id = $1::uuid",
+                stream_id,
+            )
+            current = {r["position"] for r in rows}
+            if set(order) != current:
+                return False  # order must be a permutation of exactly the existing positions
+            async with conn.transaction():
+                # Two-phase to dodge the (stream_id, position) unique constraint:
+                # park at a high offset, then write final positions.
+                offset = max(current) + 1000
+                for old_pos in order:
+                    await conn.execute(
+                        "UPDATE stream_clips SET position = position + $2 "
+                        "WHERE stream_id = $1::uuid AND position = $3",
+                        stream_id, offset, old_pos,
+                    )
+                for new_pos, old_pos in enumerate(order):
+                    await conn.execute(
+                        "UPDATE stream_clips SET position = $2 "
+                        "WHERE stream_id = $1::uuid AND position = $3",
+                        stream_id, new_pos, old_pos + offset,
+                    )
+        return True
+
     # -- saved pages (D3, Pro tier) --------------------------------------
 
     async def save_page_for_user(

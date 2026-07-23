@@ -693,3 +693,32 @@ recur, and the guard now makes it structurally impossible.
 The vaccines page had already served its purpose: it proved the full real
 pipeline (Whisper transcript → moments → Gemini assembly → Postgres → frontend →
 tutor) end to end. It will be rebuilt once the YouTube quota resets.
+
+## D55 — Stream editing; perspectives via the build API; quota wall confirmed
+Streams are now editable: `remove_stream_clip` (owner-only, closes the position
+gap so indices stay contiguous) and `reorder_stream` (owner-only, two-phase
+position rewrite in one transaction to dodge the unique constraint, and rejects
+any order that is not a permutation of the existing positions). Exposed as
+DELETE `/api/streams/{id}/clips/{pos}` and POST `/api/streams/{id}/reorder`.
+
+The build API now accepts `perspectives` mode, so the multi-lens build runs
+through the normal worker path.
+
+**YouTube quota, confirmed the hard blocker.** A single probe showed quota had
+reset, but the day's builds re-exhausted it within minutes — every subsequent
+live build now fails at retrieval with the API's own 429 (translated to
+QuotaExceeded by D53's hardening, so it degrades cleanly rather than crashing).
+A live perspectives build therefore could not complete this iteration; the
+feature stands on its 8 passing tests until the real daily reset. This is the
+D6 #1 risk in practice: the 10k/day default is small, and a handful of
+multi-section Whisper builds exhausts it. The mitigations already in code (hint
+cache, batched metadata, graceful degradation) are why a build ships a partial
+page instead of crashing, but the real fix is a quota increase (an ops task) or
+pre-building during off-hours.
+
+## D56 — Worker keeps dying to task cleanup; run it detached
+The arq worker, when launched as a tracked background task, gets killed whenever
+the harness reaps that task, which orphaned an in-flight build (it saved as
+'failed'). Relaunching with `setsid nohup ... </dev/null &` fully detaches it
+from the session so it survives. One-shot build scripts survive run_in_background
+fine; only the long-lived worker needed the stronger detachment.

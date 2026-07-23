@@ -623,3 +623,34 @@ def test_delete_stream_requires_owner(client):
     sid = client.post("/api/streams", json={"anon_id": "owner", "title": "T"}).json()["id"]
     assert client.request("DELETE", f"/api/streams/{sid}", params={"anon_id": "other"}).status_code == 404
     assert client.request("DELETE", f"/api/streams/{sid}", params={"anon_id": "owner"}).json()["removed"] is True
+
+
+class StreamEditFakeRepo(StreamFakeRepo):
+    async def remove_stream_clip(self, stream_id, anon_id, position):
+        s = self.streams.get(stream_id)
+        if not s or s["anon_id"] != anon_id or position >= len(s["clips"]):
+            return False
+        del s["clips"][position]
+        return True
+    async def reorder_stream(self, stream_id, anon_id, order):
+        s = self.streams.get(stream_id)
+        if not s or s["anon_id"] != anon_id or set(order) != set(range(len(s["clips"]))):
+            return False
+        s["clips"] = [s["clips"][i] for i in order]
+        return True
+
+
+def test_remove_clip_owner_only(client):
+    repo = StreamEditFakeRepo(); client.app.state.repo = repo
+    sid = client.post("/api/streams", json={"anon_id": "o", "title": "T", "clips": [
+        {"video_id": "v1", "t_start": 0, "t_end": 5}, {"video_id": "v2", "t_start": 0, "t_end": 5}]}).json()["id"]
+    assert client.request("DELETE", f"/api/streams/{sid}/clips/0", params={"anon_id": "intruder"}).status_code == 404
+    assert client.request("DELETE", f"/api/streams/{sid}/clips/0", params={"anon_id": "o"}).json()["removed"] is True
+
+
+def test_reorder_endpoint(client):
+    repo = StreamEditFakeRepo(); client.app.state.repo = repo
+    sid = client.post("/api/streams", json={"anon_id": "o", "title": "T", "clips": [
+        {"video_id": "v1", "t_start": 0, "t_end": 5}, {"video_id": "v2", "t_start": 0, "t_end": 5}]}).json()["id"]
+    assert client.post(f"/api/streams/{sid}/reorder", json={"anon_id": "o", "order": [1, 0]}).json()["reordered"] is True
+    assert client.post(f"/api/streams/{sid}/reorder", json={"anon_id": "intruder", "order": [0, 1]}).status_code == 400

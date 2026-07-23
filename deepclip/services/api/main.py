@@ -120,7 +120,7 @@ app.add_middleware(
 
 class BuildRequest(BaseModel):
     query: str = Field(min_length=1, max_length=300)
-    mode: str | None = Field(default=None, pattern="^(learn|entertain)$")
+    mode: str | None = Field(default=None, pattern="^(learn|entertain|perspectives)$")
 
 
 class ImportRequest(BaseModel):
@@ -426,6 +426,27 @@ async def delete_stream(stream_id: str, request: Request, anon_id: str):
     if not removed:
         raise HTTPException(404, "stream not found or not yours")
     return {"removed": True}
+
+
+@app.delete("/api/streams/{stream_id}/clips/{position}")
+async def remove_stream_clip(stream_id: str, position: int, request: Request, anon_id: str):
+    ok = await _repo(request).remove_stream_clip(stream_id, anon_id, position)
+    if not ok:
+        raise HTTPException(404, "clip not found or not your stream")
+    return {"removed": True}
+
+
+class ReorderRequest(BaseModel):
+    anon_id: str = Field(min_length=1, max_length=64)
+    order: list[int] = Field(min_length=1, max_length=100)
+
+
+@app.post("/api/streams/{stream_id}/reorder")
+async def reorder_stream(stream_id: str, req: ReorderRequest, request: Request):
+    ok = await _repo(request).reorder_stream(stream_id, req.anon_id, req.order)
+    if not ok:
+        raise HTTPException(400, "reorder rejected (not your stream, or bad order)")
+    return {"reordered": True}
 
 
 class TutorRequest(BaseModel):

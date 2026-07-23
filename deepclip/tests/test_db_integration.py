@@ -469,3 +469,44 @@ async def test_delete_stream_cascades_clips(repo):
     async with repo.pool.acquire() as conn:
         n = await conn.fetchval("SELECT count(*) FROM stream_clips WHERE stream_id = $1::uuid", sid)
     assert n == 0
+
+
+async def _stream_with_clips(repo, n=3, owner="owner"):
+    sid = await repo.create_stream(owner, "S", None)
+    for i in range(n):
+        await repo.add_stream_clip(sid, {"video_id": f"v{i}", "t_start": i * 10, "t_end": i * 10 + 5})
+    return sid
+
+
+async def test_remove_stream_clip_closes_gap(repo):
+    sid = await _stream_with_clips(repo, 3)
+    assert await repo.remove_stream_clip(sid, "owner", 1) is True
+    s = await repo.get_stream(sid)
+    # positions must stay contiguous 0,1 after removing the middle one
+    assert [c["position"] for c in s["clips"]] == [0, 1]
+    assert [c["video_id"] for c in s["clips"]] == ["v0", "v2"]
+
+
+async def test_remove_stream_clip_owner_only(repo):
+    sid = await _stream_with_clips(repo, 2)
+    assert await repo.remove_stream_clip(sid, "not_owner", 0) is False
+    assert len((await repo.get_stream(sid))["clips"]) == 2
+
+
+async def test_reorder_stream(repo):
+    sid = await _stream_with_clips(repo, 3)  # v0,v1,v2 at 0,1,2
+    assert await repo.reorder_stream(sid, "owner", [2, 0, 1]) is True
+    s = await repo.get_stream(sid)
+    assert [c["video_id"] for c in s["clips"]] == ["v2", "v0", "v1"]
+    assert [c["position"] for c in s["clips"]] == [0, 1, 2]
+
+
+async def test_reorder_owner_only(repo):
+    sid = await _stream_with_clips(repo, 2)
+    assert await repo.reorder_stream(sid, "intruder", [1, 0]) is False
+
+
+async def test_reorder_rejects_non_permutation(repo):
+    sid = await _stream_with_clips(repo, 3)
+    assert await repo.reorder_stream(sid, "owner", [0, 1]) is False  # missing pos 2
+    assert await repo.reorder_stream(sid, "owner", [0, 1, 5]) is False  # 5 not a position
