@@ -121,6 +121,29 @@ class AnthropicClient:
         raise LLMError(f"LLM call failed after {MAX_RETRIES} attempts: {last_exc}")
 
 
+
+# Providers report how long to wait on a rate limit. Respecting it is the
+# difference between a build that survives an RPM cap and one that dies.
+_RETRY_DELAY = re.compile(r"retry(?:Delay)?[\"':\s]+(\d+(?:\.\d+)?)s", re.IGNORECASE)
+_RETRY_IN = re.compile(r"retry in (\d+(?:\.\d+)?)s", re.IGNORECASE)
+# Never sleep longer than this on one attempt, so a pathological value cannot
+# hang a worker slot.
+MAX_RETRY_SLEEP_S = 65.0
+
+
+def _retry_delay_seconds(exc: Exception, default: float) -> float:
+    """Seconds to wait, taken from the provider's own retry hint when present."""
+    text = str(exc)
+    for pattern in (_RETRY_DELAY, _RETRY_IN):
+        m = pattern.search(text)
+        if m:
+            try:
+                return min(float(m.group(1)) + 1.0, MAX_RETRY_SLEEP_S)
+            except ValueError:
+                break
+    return default
+
+
 def _gemini_text(resp: Any) -> str:
     """Pull text out of a Gemini response, tolerating blocked/empty candidates.
 
@@ -234,9 +257,12 @@ class GeminiClient:
             except Exception as exc:  # network/rate-limit
                 last_exc = exc
                 log.warning("Gemini call failed (attempt %d): %s", attempt + 1, exc)
-                # Back off on rate limits; free-tier RPM caps are transient.
                 if "429" in str(exc) and attempt < MAX_RETRIES - 1:
-                    time.sleep(2.0 * (attempt + 1))
+                    # Honour the server's own retryDelay. Free-tier RPM limits
+                    # report e.g. "retry in 31s"; a fixed 2s/4s backoff is
+                    # guaranteed to fail against that, which is what starved the
+                    # assembly call and lost a whole build.
+                    time.sleep(_retry_delay_seconds(exc, default=2.0 * (attempt + 1)))
                 continue
             usage = getattr(raw, "usage_metadata", None)
             resp = LLMResponse(

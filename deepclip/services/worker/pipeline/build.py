@@ -58,6 +58,11 @@ MIN_TRANSCRIPT_COVERAGE = 0.5
 MAX_MOMENTS_PER_VIDEO = int(os.environ.get("MAX_MOMENTS_PER_VIDEO", "6"))
 MAX_TOTAL_CANDIDATES = int(os.environ.get("MAX_TOTAL_CANDIDATES", "120"))
 
+# Stage-4 name repair costs one LLM call per moment and is the least valuable
+# call in the pipeline. On a rate-limited key it exhausts the per-minute budget
+# before assembly runs, killing the build outright. Off unless asked for.
+NAME_REPAIR_ENABLED = os.environ.get("DEEPCLIP_NAME_REPAIR", "").lower() in {"1", "true", "yes"}
+
 ProgressFn = Callable[[str, str, float, dict], None]
 
 
@@ -223,9 +228,14 @@ def build_page(
             if looks_like_junk(m.text):
                 continue
             text = m.text
-            # Auto-captions mangle proper nouns; repairing before embedding is
-            # the only point at which it can still help retrieval.
-            if transcript.kind in {"auto", "whisper"} and names:
+            # Auto-captions mangle proper nouns, and repairing before embedding
+            # is the only point at which it can still help retrieval — but it
+            # costs one LLM call PER MOMENT. On a rate-limited key that spends
+            # the whole per-minute budget before assembly (the call that
+            # actually produces the page) gets a turn, and the build dies with
+            # nothing to show. It is the lowest-value call in the pipeline, so
+            # it is opt-in. Enable only with generous quota.
+            if NAME_REPAIR_ENABLED and transcript.kind in {"auto", "whisper"} and names:
                 text = repair_names(text, names, deps.llm)
             rows.append(
                 Candidate(

@@ -810,3 +810,22 @@ cost an iteration of wrongly assuming live builds were impossible.
 
 Postgres had genuinely stopped, though — restarted it and the API, which
 restored the local stack.
+
+## D60 — Rate limits: honour the server's retry hint, and stop wasting the budget
+A live build reached assembly and died. Cause: Gemini's free tier allows 15
+requests/minute, and **stage-4 name repair fires one LLM call per moment** — a
+10-video build spent the entire per-minute budget on the least valuable call in
+the pipeline, so the assembly call (the one that actually produces the page)
+429'd and the whole build was lost with nothing to show.
+
+Two fixes:
+- **Name repair is now opt-in** (`DEEPCLIP_NAME_REPAIR=1`, default off). It helps
+  retrieval on auto-captions, but not enough to justify starving assembly. Turn
+  it on only with generous quota.
+- **Backoff honours the provider's own retry hint.** The API replies "retry in
+  31s"; the old fixed 2s/4s backoff was guaranteed to fail against an RPM cap.
+  `_retry_delay_seconds` parses `retryDelay`/"retry in Ns" and sleeps that long,
+  capped at 65s so a pathological value cannot hang a worker slot.
+
+General lesson: with a rate-limited key, *call ordering is a design decision*.
+Cheap optional calls must not run before the irreplaceable ones.
