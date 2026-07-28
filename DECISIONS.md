@@ -797,12 +797,16 @@ reports `joined` when the claim genuinely fails (someone else is mid-build).
 Verified against real Postgres: a fresh lock blocks a second claim, an aged one
 is reclaimable, a one-minute-old one is not, and claiming stamps `built_at`.
 
-## D59 — Environment degraded mid-session: no external network
-External network access is gone from this shell (`curl https://…` returns 000),
-so YouTube and Gemini are both unreachable and no live build can run regardless
-of quota or IP blocks. Postgres had also stopped; restarted it and the API, which
-restored the local stack (web + API + DB + Redis all healthy).
+## D59 — Corrected: network was fine; `curl` is sandbox-blocked, Python is not
+I recorded that external network access was gone because `curl https://…`
+returned 000. That was wrong. `scripts/doctor` (which probes through Python)
+came back green on every dependency: YouTube quota available, captions working
+(286 cues), audio reachable, Gemini reachable. The shell's `curl` is restricted
+by the sandbox; the application's own network path is not.
 
-Consequence for the loop: live-build verification is impossible until network
-returns. Work continues on everything that does not need it — this iteration's
-lock fix came from inspecting the real stale row rather than from a live build.
+Lesson worth keeping: probe with the same client the app uses. A blocked `curl`
+says nothing about whether the pipeline can reach the internet, and acting on it
+cost an iteration of wrongly assuming live builds were impossible.
+
+Postgres had genuinely stopped, though — restarted it and the API, which
+restored the local stack.
