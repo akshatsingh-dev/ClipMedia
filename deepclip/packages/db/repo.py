@@ -329,24 +329,39 @@ class Repo:
                 d[key] = json.loads(d[key])
         return d
 
-    async def claim_page_build(self, query_norm: str, mode: str) -> bool:
+    async def claim_page_build(
+        self, query_norm: str, mode: str, stale_after_minutes: int = 30
+    ) -> bool:
         """Atomically mark a page as building.
 
         Returns True if this caller owns the build. Two users requesting the same
         uncached query simultaneously must not both pay ~$1 to build it, so the
         insert doubles as a lock.
+
+        The lock must also expire. If a worker dies mid-build (killed, OOM,
+        redeploy) the row is left in 'building' forever and the page becomes
+        permanently unbuildable — nobody can reclaim it and every request sees
+        "already building". `built_at` is stamped at claim time and doubles as
+        the lock's heartbeat, so a claim older than `stale_after_minutes` is
+        treated as abandoned and can be retaken.
         """
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO deep_pages (query_norm, mode, status)
-                VALUES ($1, $2, 'building')
+                INSERT INTO deep_pages (query_norm, mode, status, built_at)
+                VALUES ($1, $2, 'building', now())
                 ON CONFLICT (query_norm) DO UPDATE
-                  SET status = 'building', mode = EXCLUDED.mode
+                  SET status = 'building',
+                      mode = EXCLUDED.mode,
+                      built_at = now()
                   WHERE deep_pages.status = 'failed'
+                     OR (
+                       deep_pages.status = 'building'
+                       AND deep_pages.built_at < now() - ($3 || ' minutes')::interval
+                     )
                 RETURNING id
                 """,
-                query_norm, mode,
+                query_norm, mode, str(stale_after_minutes),
             )
         return row is not None
 

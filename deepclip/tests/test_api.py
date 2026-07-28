@@ -122,7 +122,12 @@ class FakeRepo:
             if v.get("status") == status
         ][:limit]
 
-    async def claim_page_build(self, query_norm, mode):
+    async def claim_page_build(self, query_norm, mode, stale_after_minutes=30):
+        # Mirror the real lock: an in-flight 'building' page cannot be reclaimed
+        # (staleness is covered by the DB integration tests, which use real time).
+        existing = self._pages.get(query_norm)
+        if existing and existing.get("status") == "building":
+            return False
         self.claimed.append((query_norm, mode))
         return True
 

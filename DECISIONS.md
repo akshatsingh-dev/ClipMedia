@@ -780,3 +780,29 @@ tokens. Exit code 0/1 so it can gate a prebuild run.
 Current live state after the fixes: YouTube quota available, captions still
 IP-blocked, **audio working**, Gemini reachable — so live Whisper builds run
 today, which the previous session had concluded was impossible.
+
+## D58 — Build lock now expires; a dead worker no longer bricks a page
+Found on a real stale row: the vaccines page sat in `status='building'` forever
+because its worker was killed mid-build. `claim_page_build` only allowed
+reclaiming a `failed` page, so a page whose worker died became **permanently
+unbuildable** — every subsequent request saw "already building" and no one could
+ever retake it.
+
+Fix: `built_at` is now stamped at claim time and doubles as the lock's heartbeat.
+A claim older than `stale_after_minutes` (default 30) is treated as abandoned and
+can be retaken. The API also now *claims first* rather than reading status and
+deciding, so the stale-lock path is exercised on the real code path; it only
+reports `joined` when the claim genuinely fails (someone else is mid-build).
+
+Verified against real Postgres: a fresh lock blocks a second claim, an aged one
+is reclaimable, a one-minute-old one is not, and claiming stamps `built_at`.
+
+## D59 — Environment degraded mid-session: no external network
+External network access is gone from this shell (`curl https://…` returns 000),
+so YouTube and Gemini are both unreachable and no live build can run regardless
+of quota or IP blocks. Postgres had also stopped; restarted it and the API, which
+restored the local stack (web + API + DB + Redis all healthy).
+
+Consequence for the loop: live-build verification is impossible until network
+returns. Work continues on everything that does not need it — this iteration's
+lock fix came from inspecting the real stale row rather than from a live build.

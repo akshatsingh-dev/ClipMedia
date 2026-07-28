@@ -510,3 +510,42 @@ async def test_reorder_rejects_non_permutation(repo):
     sid = await _stream_with_clips(repo, 3)
     assert await repo.reorder_stream(sid, "owner", [0, 1]) is False  # missing pos 2
     assert await repo.reorder_stream(sid, "owner", [0, 1, 5]) is False  # 5 not a position
+
+
+# -- stale build lock ---------------------------------------------------
+
+
+async def test_building_lock_blocks_a_second_claim(repo):
+    assert await repo.claim_page_build("gandhi", "learn") is True
+    assert await repo.claim_page_build("gandhi", "learn") is False
+
+
+async def test_stale_building_lock_can_be_reclaimed(repo):
+    """A worker that dies mid-build must not make a page unbuildable forever."""
+    assert await repo.claim_page_build("gandhi", "learn") is True
+    # Age the claim past the staleness window.
+    async with repo.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE deep_pages SET built_at = now() - interval '2 hours' "
+            "WHERE query_norm = 'gandhi'"
+        )
+    assert await repo.claim_page_build("gandhi", "learn") is True, "stale lock not reclaimable"
+
+
+async def test_fresh_building_lock_survives_short_staleness_window(repo):
+    await repo.claim_page_build("gandhi", "learn")
+    # Only a minute old with a 30-minute window: still genuinely in flight.
+    async with repo.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE deep_pages SET built_at = now() - interval '1 minute' "
+            "WHERE query_norm = 'gandhi'"
+        )
+    assert await repo.claim_page_build("gandhi", "learn") is False
+
+
+async def test_claim_stamps_built_at(repo):
+    """built_at doubles as the lock heartbeat, so a claim must set it."""
+    await repo.claim_page_build("gandhi", "learn")
+    async with repo.pool.acquire() as conn:
+        ts = await conn.fetchval("SELECT built_at FROM deep_pages WHERE query_norm='gandhi'")
+    assert ts is not None

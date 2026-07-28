@@ -242,19 +242,24 @@ async def build(req: BuildRequest, request: Request):
     existing = await repo.get_page(slug)
     if existing and existing.get("status") == "ready":
         return {"cached": True, "slug": slug, "mode": existing["mode"], "page": existing["page"]}
-    if existing and existing.get("status") == "building":
-        # Another request already owns this build; join its stream rather than
-        # paying to build the same page twice.
-        return {"cached": False, "slug": slug, "status": "building", "joined": True}
 
     queue = request.app.state.queue
     if queue is None:
         raise HTTPException(503, "build queue unavailable")
 
+    # Try to take the lock. It succeeds for a new page, a previously failed one,
+    # or one whose 'building' claim went stale because its worker died. Claiming
+    # first (rather than reading status and deciding) is what stops a dead
+    # worker from making a page permanently unbuildable.
+    claimed = await repo.claim_page_build(slug, req.mode or "learn")
+    if not claimed:
+        # Someone else genuinely owns an in-flight build; join their stream
+        # rather than paying to build the same page twice.
+        return {"cached": False, "slug": slug, "status": "building", "joined": True}
+
     # Paid path reached: enforce the limit now, not on cached hits above.
     await _enforce_limit(request, BUILD_LIMIT, "build")
 
-    await repo.claim_page_build(slug, req.mode or "learn")
     job = await queue.enqueue_job("build_page", req.query, req.mode)
     return {"cached": False, "slug": slug, "status": "building", "job_id": job.job_id}
 
