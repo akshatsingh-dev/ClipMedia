@@ -1,6 +1,34 @@
 # Deep Clip Search
 
-Implementation of Part C of `deep-clip-search-master-doc.md`.
+Answers a question with video clips instead of prose.
+
+You ask something like *how do neural networks work*. The system plans an
+outline, retrieves candidate YouTube videos, ingests their transcripts, finds
+the moments in each that actually address a part of the question, ranks them,
+and assembles a page of timestamped clips — every one attributed to its
+creator, each with a line explaining why it's there.
+
+Two output modes, because the two use cases want different shapes:
+
+- **Learn** — a structured page. Chapters, ordered clips, a stated end.
+- **Entertain** — a full-viewport snap-scroll feed. Also has a stated end;
+  the spec treats "never loop" as inviolable, and the code enforces it.
+
+Python worker and FastAPI service, Next.js front end, Postgres with pgvector,
+266 offline tests.
+
+## Design constraints worth naming
+
+**No new facts at assembly.** Stage 7 composes only from retrieved transcript
+content. A model that paraphrases beyond its sources produces confident
+nonsense with a creator's name attached, so the rule is enforced in code
+rather than asked for in a prompt.
+
+**Credit is structural.** Channel attribution rides on the clip object
+through every stage; there's no path that renders a clip without it.
+
+**The eval harness reports its own untrustworthiness.** With no golden picks
+defined yet, it says so rather than emitting a score that looks meaningful.
 
 ## See the product (no API keys, no Docker)
 
